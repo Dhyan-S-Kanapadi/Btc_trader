@@ -94,6 +94,7 @@ class Position(FrozenModel):
     entry_price: Decimal = Field(gt=0)
     entry_time: datetime
     stop_price: Decimal = Field(gt=0)
+    initial_stop_price: Decimal = Field(gt=0)
     exit_price: Decimal | None = Field(default=None, gt=0)
     exit_time: datetime | None = None
     fees: Decimal = Field(default=Decimal("0"), ge=0)
@@ -120,6 +121,7 @@ class Trade(FrozenModel):
     entry_price: Decimal = Field(gt=0)
     entry_time: datetime
     stop_price: Decimal = Field(gt=0)
+    initial_stop_price: Decimal = Field(gt=0)
     exit_price: Decimal = Field(gt=0)
     exit_time: datetime
     fees: Decimal = Field(default=Decimal("0"), ge=0)

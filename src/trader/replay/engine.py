@@ -158,6 +158,7 @@ def step(
                     entry_price=entry.price,
                     entry_time=entry.fill_time,
                     stop_price=fill_risk.stop_price,
+                    initial_stop_price=fill_risk.stop_price,
                     fees=entry.fee,
                     reason=pending.candidate.idempotency_key,
                     entry_fee=entry.fee,

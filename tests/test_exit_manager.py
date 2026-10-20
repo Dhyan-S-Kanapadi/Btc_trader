@@ -18,6 +18,7 @@ def _position(**updates) -> Position:
         entry_price=Decimal("100"),
         entry_time=datetime(2026, 1, 1, tzinfo=UTC),
         stop_price=Decimal("90"),
+        initial_stop_price=Decimal("90"),
         reason="entry",
         entry_fee=Decimal("0"),
     )
@@ -57,3 +58,26 @@ def test_stop_gap_and_ratchet_next_candle() -> None:
         ).reason_code
         == "trailing_stop"
     )
+
+
+def test_trade_retains_immutable_initial_stop_after_ratchet() -> None:
+    position = process_candle(
+        _position(), _candle("100", "95", "110"), Decimal("5"), Settings(), CostSettings()
+    ).position
+    assert position.stop_price == Decimal("100")
+    from trader.broker import Fill
+    from trader.risk import trade_from_exit
+
+    trade = trade_from_exit(
+        position,
+        Fill(
+            side="SELL",
+            quantity=Decimal("1"),
+            price=Decimal("99"),
+            fee=Decimal("0"),
+            fill_time=datetime(2026, 1, 2, tzinfo=UTC),
+        ),
+        "trailing_stop",
+    )
+    assert trade.stop_price == Decimal("100")
+    assert trade.initial_stop_price == Decimal("90")
