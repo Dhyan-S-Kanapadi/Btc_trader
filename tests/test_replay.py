@@ -3,8 +3,19 @@
 from datetime import UTC, datetime
 from decimal import Decimal
 
+import pytest
+
 from trader.config import Settings
-from trader.replay import TakeAllPolicy, VolumeFilterPolicy, generate_candles, run_replay, step
+from trader.replay import (
+    AccountConfig,
+    TakeAllPolicy,
+    VolumeFilterPolicy,
+    generate_candles,
+    policy_for,
+    run_replay,
+    run_routed_replay,
+    step,
+)
 from trader.replay.engine import ReplayState
 from trader.risk import AccountState
 
@@ -84,3 +95,52 @@ def test_volume_filter_baseline_can_skip() -> None:
         run_replay(candles, VolumeFilterPolicy(Decimal("999")), _config()).decisions
         != run_replay(candles, TakeAllPolicy(), _config()).decisions
     )
+
+
+def test_router_shares_signal_but_keeps_accounts_independent() -> None:
+    candles = generate_candles(7, 200, datetime(2026, 1, 1, tzinfo=UTC), "1h")
+    config = _config()
+
+    def state(account_id: str) -> ReplayState:
+        return ReplayState(
+            account_id=account_id,
+            cash=Decimal("10000"),
+            risk=AccountState(
+                account_id=account_id,
+                equity=Decimal("10000"),
+                peak_equity=Decimal("10000"),
+                day_start_equity=Decimal("10000"),
+                current_day=candles[0].open_time.date(),
+                open_position_count=0,
+            ),
+        )
+
+    accounts = {
+        account_id: (
+            state(account_id),
+            AccountConfig(
+                account_id=account_id,
+                label=f"Paper {account_id}",
+                policy_name="take_all" if account_id == "A" else "skip_all",
+                starting_equity=Decimal("10000"),
+            ),
+        )
+        for account_id in "ABCD"
+    }
+    results = run_routed_replay(candles, accounts, config)
+    decisions = {account_id: result.decisions for account_id, result in results.items()}
+    assert decisions["A"]
+    assert (
+        [item.candidate for item in decisions["B"]]
+        == [item.candidate for item in decisions["C"]]
+        == [item.candidate for item in decisions["D"]]
+    )
+    assert all(item.reason == "agent not wired yet (#27)" for item in decisions["B"])
+    assert results["B"].state.position is None
+    assert results["B"].trades == ()
+    assert results["A"].state != results["B"].state
+
+
+def test_unknown_account_policy_fails_fast() -> None:
+    with pytest.raises(ValueError, match="unknown paper-account policy"):
+        policy_for("not-a-policy", _config())

@@ -23,13 +23,14 @@ def build_parser() -> argparse.ArgumentParser:
     subcommands.add_parser("migrate", help="Apply database migrations.")
     backfill = subcommands.add_parser("backfill", help="Fetch public closed market-data candles.")
     backfill.add_argument("--days", type=int, help="Number of days to backfill.")
+    subcommands.add_parser("seed-accounts", help="Idempotently seed paper accounts A through D.")
     replay = subcommands.add_parser("replay", help="Run an offline paper-trading replay.")
     replay.add_argument("--source", choices=("synthetic", "db"), default="synthetic")
     replay.add_argument("--seed", type=int, default=1)
     replay.add_argument("--bars", type=int, default=3000)
     replay.add_argument("--start", help="Inclusive UTC ISO-8601 timestamp for database replay.")
     replay.add_argument("--end", help="Inclusive UTC ISO-8601 timestamp for database replay.")
-    replay.add_argument("--account", default="A")
+    replay.add_argument("--accounts", default="A", help="Comma-separated seeded paper accounts.")
     replay.add_argument("--policy", choices=("take_all", "volume_filter"), default="take_all")
     replay.add_argument("--output-dir", type=Path, default=Path("replay-output"))
     replay.add_argument("--persist", action="store_true")
@@ -87,16 +88,48 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         return 0
 
+    if args.command == "seed-accounts":
+        from trader.config import Settings
+        from trader.db.storage import PostgresStorage
+
+        settings = Settings()
+        if settings.database_url is None:
+            parser.error("DATABASE_URL is required for trader seed-accounts")
+        storage = PostgresStorage(settings.database_url)
+        for account_id, policy_name in (
+            ("A", "take_all"),
+            ("B", "skip_all"),
+            ("C", "skip_all"),
+            ("D", "skip_all"),
+        ):
+            storage.seed_account(
+                account_id,
+                settings.risk.starting_equity,
+                {
+                    "account_id": account_id,
+                    "label": f"Paper account {account_id}",
+                    "policy_name": policy_name,
+                    "starting_equity": str(settings.risk.starting_equity),
+                    "enabled": True,
+                },
+            )
+        configure_logging().info("paper accounts seeded", extra={"command": "seed-accounts"})
+        return 0
+
     if args.command == "replay":
         from trader.config import Settings
         from trader.db.storage import PostgresStorage
         from trader.replay import (
+            AccountConfig,
             TakeAllPolicy,
             VolumeFilterPolicy,
             generate_candles,
-            persist_replay,
+            load_account_state,
+            persist_routed_candle,
             refuse_nonempty_account,
             run_replay,
+            run_routed_replay,
+            write_combined_summary,
             write_output,
         )
 
@@ -110,46 +143,87 @@ def main(argv: Sequence[str] | None = None) -> int:
                 update={"strategy": base.strategy.model_copy(update={"symbol": "SYNTH-BTC"})}
             )
         )
-        policy = (
-            TakeAllPolicy()
-            if args.policy == "take_all"
-            else VolumeFilterPolicy(settings.strategy.volume_ratio_min)
-        )
-        storage = None
+        storage = None if base.database_url is None else PostgresStorage(base.database_url)
         if args.source == "synthetic":
             candles = generate_candles(
                 args.seed, args.bars, datetime(2026, 1, 1, tzinfo=UTC), settings.strategy.interval
             )
         else:
-            if base.database_url is None:
+            if storage is None:
                 parser.error("DATABASE_URL is required for database replay")
-            storage = PostgresStorage(base.database_url)
             start = datetime.fromisoformat(args.start).astimezone(UTC) if args.start else None
             end = datetime.fromisoformat(args.end).astimezone(UTC) if args.end else None
             candles = storage.load_candles(
                 settings.strategy.symbol, settings.strategy.interval, start, end
             )
-        result = run_replay(candles, policy, settings, args.account)
-        write_output(args.output_dir, result, settings, args.seed, args.policy, args.source)
+        account_ids = tuple(part.strip() for part in args.accounts.split(",") if part.strip())
+        if not account_ids or len(set(account_ids)) != len(account_ids):
+            parser.error("--accounts must contain unique account IDs")
+        if account_ids == ("A",) and not args.persist:
+            policy = (
+                TakeAllPolicy()
+                if args.policy == "take_all"
+                else VolumeFilterPolicy(settings.strategy.volume_ratio_min)
+            )
+            result = run_replay(candles, policy, settings, "A")
+            write_output(args.output_dir, result, settings, args.seed, args.policy, args.source)
+            configure_logging().info(
+                "replay complete",
+                extra={
+                    "source": args.source.upper(),
+                    "accounts": ["A"],
+                    "trades": len(result.trades),
+                },
+            )
+            return 0
+        if storage is None:
+            parser.error("DATABASE_URL is required for multi-account or persisted replay")
+        try:
+            account_configs = {
+                account_id: AccountConfig.model_validate(storage.load_account_config(account_id))
+                for account_id in account_ids
+            }
+        except (LookupError, ValueError) as error:
+            parser.error(f"invalid account configuration: {error}")
         if args.persist:
-            if storage is None:
-                if base.database_url is None:
-                    parser.error("DATABASE_URL is required for --persist")
-                storage = PostgresStorage(base.database_url)
-            refuse_nonempty_account(storage, args.account)
-            persist_replay(
-                storage,
-                candles,
-                settings.strategy.interval,
+            for account_id in account_ids:
+                refuse_nonempty_account(storage, account_id)
+        results = run_routed_replay(
+            candles,
+            {
+                account_id: (load_account_state(storage, account), account)
+                for account_id, account in account_configs.items()
+            },
+            settings,
+            (
+                lambda candle, routed: persist_routed_candle(
+                    storage, settings.strategy.interval, candle, routed
+                )
+            )
+            if args.persist
+            else None,
+        )
+        for account_id, result in results.items():
+            write_output(
+                args.output_dir / account_id,
                 result,
-                {"source": args.source, "seed": args.seed, "policy": args.policy},
+                settings,
+                args.seed,
+                account_configs[account_id].policy_name,
+                args.source,
+            )
+        write_combined_summary(args.output_dir, results)
+        if args.persist:
+            storage.save_run_metadata(
+                "SYNTHETIC_REPLAY" if args.source == "synthetic" else "REPLAY",
+                {"source": args.source, "seed": args.seed, "accounts": list(account_ids)},
             )
         configure_logging().info(
             "replay complete",
             extra={
                 "source": args.source.upper(),
-                "trades": len(result.trades),
-                "final_equity": str(result.state.risk.equity),
+                "accounts": list(account_ids),
+                "trades": sum(len(result.trades) for result in results.values()),
             },
         )
         return 0

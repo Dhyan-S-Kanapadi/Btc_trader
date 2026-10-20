@@ -16,6 +16,7 @@ from .models import (
     AccountRow,
     CandidateRow,
     CandleRow,
+    ConfigRow,
     DecisionRow,
     EquityPointRow,
     OrderRow,
@@ -77,6 +78,14 @@ class PaperStorage(Protocol):
     def account_has_replay_rows(self, account_id: str) -> bool: ...
 
     def candle_id(self, symbol: str, interval: str, open_time: datetime) -> UUID: ...
+
+    def candidate_id(self, idempotency_key: str) -> UUID | None: ...
+
+    def decision_exists(self, account_id: str, candidate_key: str) -> bool: ...
+
+    def equity_exists(self, account_id: str, recorded_at: datetime) -> bool: ...
+
+    def trade_exists(self, account_id: str, reason: str, exit_time: datetime) -> bool: ...
 
     def save_candidate(self, candidate: Candidate, candle_id: UUID) -> UUID: ...
 
@@ -239,6 +248,63 @@ class PostgresStorage:
             raise LookupError("candle was not persisted")
         return value
 
+    def candidate_id(self, idempotency_key: str) -> UUID | None:
+        """Return a shared candidate by its stable key."""
+
+        with self._sessions() as session:
+            return session.scalar(
+                select(CandidateRow.id).where(CandidateRow.idempotency_key == idempotency_key)
+            )
+
+    def decision_exists(self, account_id: str, candidate_key: str) -> bool:
+        """Check per-account candidate idempotency before writing a route result."""
+
+        with self._sessions() as session:
+            return (
+                session.scalar(
+                    select(DecisionRow.id)
+                    .where(
+                        DecisionRow.account_id == account_id,
+                        DecisionRow.candidate_idempotency_key == candidate_key,
+                    )
+                    .limit(1)
+                )
+                is not None
+            )
+
+    def equity_exists(self, account_id: str, recorded_at: datetime) -> bool:
+        """Check the unique equity point key before a re-routed candle writes it again."""
+
+        with self._sessions() as session:
+            return (
+                session.scalar(
+                    select(EquityPointRow.id)
+                    .where(
+                        EquityPointRow.account_id == account_id,
+                        EquityPointRow.recorded_at == recorded_at,
+                    )
+                    .limit(1)
+                )
+                is not None
+            )
+
+    def trade_exists(self, account_id: str, reason: str, exit_time: datetime) -> bool:
+        """Check a completed trade's stable entry key and exit time before recording it again."""
+
+        with self._sessions() as session:
+            return (
+                session.scalar(
+                    select(TradeRow.id)
+                    .where(
+                        TradeRow.account_id == account_id,
+                        TradeRow.reason == reason,
+                        TradeRow.exit_time == exit_time,
+                    )
+                    .limit(1)
+                )
+                is not None
+            )
+
     def save_run_metadata(self, kind: str, metadata: dict[str, object]) -> UUID:
         """Persist deterministic replay metadata without credentials."""
 
@@ -293,6 +359,53 @@ class PostgresStorage:
                     peak_equity,
                     halted,
                 )
+
+    def save_engine_state(self, account_id: str, state: dict[str, object]) -> None:
+        """Persist the complete serializable replay state for restart recovery."""
+
+        with self._sessions.begin() as session:
+            row = session.get(AccountRow, account_id)
+            if row is None:
+                raise LookupError(f"account does not exist: {account_id}")
+            row.engine_state = state
+
+    def load_engine_state(self, account_id: str) -> dict[str, object] | None:
+        """Load serialized replay state without retaining it in process memory."""
+
+        with self._sessions() as session:
+            row = session.get(AccountRow, account_id)
+            return None if row is None else row.engine_state
+
+    def seed_account(self, account_id: str, cash: Decimal, config: dict[str, object]) -> None:
+        """Create a paper account/config only when absent; never overwrite operator changes."""
+
+        with self._sessions.begin() as session:
+            if session.get(AccountRow, account_id) is None:
+                session.add(
+                    AccountRow(
+                        account_id=account_id,
+                        cash=cash,
+                        equity=cash,
+                        peak_equity=cash,
+                        halted=False,
+                    )
+                )
+            if (
+                session.scalar(select(ConfigRow.id).where(ConfigRow.account_id == account_id))
+                is None
+            ):
+                session.add(ConfigRow(account_id=account_id, config=config))
+
+    def load_account_config(self, account_id: str) -> dict[str, object]:
+        """Load non-secret account config or fail before routing begins."""
+
+        with self._sessions() as session:
+            config = session.scalar(
+                select(ConfigRow.config).where(ConfigRow.account_id == account_id)
+            )
+        if config is None:
+            raise LookupError(f"account config does not exist: {account_id}")
+        return config
 
     def load_account_state(self, account_id: str) -> AccountRow | None:
         with self._sessions() as session:
