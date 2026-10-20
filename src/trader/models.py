@@ -98,6 +98,10 @@ class Position(FrozenModel):
     exit_time: datetime | None = None
     fees: Decimal = Field(default=Decimal("0"), ge=0)
     reason: str = Field(min_length=1)
+    entry_fee: Decimal = Field(default=Decimal("0"), ge=0)
+    highest_high_since_entry: Decimal | None = Field(default=None, gt=0)
+    bars_held: int = Field(default=0, ge=0)
+    time_stop_exit_due: bool = False
 
     _validate_entry_time = field_validator("entry_time")(_utc_datetime)
 
