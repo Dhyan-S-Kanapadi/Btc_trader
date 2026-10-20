@@ -80,6 +80,14 @@ positive inputs, stop validity, then sizing. Daily loss compares marked equity (
 marked unrealized P&L) to UTC `day_start_equity`. A drawdown halt persists until an external,
 audited reset. Entry price is an estimate at signal time; Issue #7 will re-size after actual fill.
 
+## Paper broker
+
+Paper fills use only recorded candles: entries use the next open, stops use the open on a gap or
+the stop otherwise, and all buys add slippage while all sells subtract it. Fees apply on both sides.
+When stop and target both touch, stop wins; targets are only a safeguard for now. Fee (10 bps/side)
+and slippage (5 bps) are assumptions to verify, not exchange facts. Risk sizing must be re-run at
+actual fill price; this module never talks to an exchange or network.
+
 ## Docker and Compose
 
 The image uses Python 3.12 slim and runs the single `trader` CLI as a non-root user. The
