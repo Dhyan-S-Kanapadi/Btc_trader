@@ -49,6 +49,21 @@ class CostSettings(BaseModel):
     )
 
 
+class DataSettings(BaseModel):
+    """Public market-data ingestion settings; no credentials are used."""
+
+    base_url: str = Field(
+        "https://data-api.binance.vision",
+        description="Public Binance market-data base URL, without a trailing path.",
+    )
+    timeout_seconds: float = Field(10.0, gt=0, description="HTTP request timeout in seconds.")
+    max_retries: int = Field(
+        3, ge=0, le=10, description="Retries for transient public-data failures."
+    )
+    max_retry_seconds: float = Field(30.0, gt=0, description="Maximum delay for one retry.")
+    backfill_days: int = Field(30, gt=0, description="Default number of days for CLI backfill.")
+
+
 class Settings(BaseSettings):
     """All configuration sourced from environment variables or explicit test inputs."""
 
@@ -62,6 +77,9 @@ class Settings(BaseSettings):
     )
     costs: CostSettings = Field(
         default_factory=CostSettings, description="Cost assumptions section."
+    )
+    data: DataSettings = Field(
+        default_factory=DataSettings, description="Public market-data section."
     )
     database_url: str | None = Field(
         default=None,

@@ -128,3 +128,19 @@ def test_candidate_is_idempotent_per_account(storage: PostgresStorage) -> None:
 
     for account_id in "ABCD":
         assert storage.decision_count(account_id, candidate.idempotency_key) == 1
+
+
+def test_candle_upsert_is_idempotent(storage: PostgresStorage) -> None:
+    candle_time = datetime(2026, 1, 1, tzinfo=UTC)
+    candle = Candle(
+        symbol="BTCUSDT",
+        open_time=candle_time,
+        open=Decimal("100"),
+        high=Decimal("110"),
+        low=Decimal("90"),
+        close=Decimal("105"),
+        volume=Decimal("1"),
+    )
+    storage.upsert_candles([candle], "1h")
+    storage.upsert_candles([candle], "1h")
+    assert storage.candle_times("BTCUSDT", "1h", candle_time, candle_time) == [candle_time]
