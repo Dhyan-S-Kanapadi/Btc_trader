@@ -44,15 +44,38 @@ calculations do not inherit binary floating-point rounding errors.
 
 The image uses Python 3.12 slim and runs the single `trader` CLI as a non-root user. The
 Compose stack starts local-only PostgreSQL 16, waits for its health check, then runs
-`trader --help`. It does not implement database access or trading logic.
+`trader --help`. `make up` runs it detached so database tests can connect from the host.
 
 ```powershell
 docker compose up --build
 docker compose down
 ```
 
-`DATABASE_URL` is passed to the app container only as a local Compose environment value;
-Issue #3 will add database configuration. It is not read by the current Settings class.
+`DATABASE_URL` is the only database connection setting. The Compose credentials are local-only
+defaults; they are not production credentials.
+
+## PostgreSQL schema and migrations
+
+All durable paper-trading state uses PostgreSQL. Prices and quantities use `Decimal` and map to
+`NUMERIC(30,12)`. The initial Alembic revision creates candles, candidates, snapshots, accounts,
+decisions, orders, positions, trades, equity_curve, configs, and run_metadata. The `configs` JSON
+document must never contain credentials, tokens, or exchange keys.
+
+Start the local database, apply the migration as the one-off command, then run the integration
+tests:
+
+```powershell
+make up
+$env:DATABASE_URL = "postgresql+psycopg://paper:paper@localhost:5432/paper_trader"
+trader migrate
+make test
+docker compose logs app
+make down
+```
+
+`trader migrate` runs `alembic upgrade head`; it makes no trades and is intended to become a
+one-off Fargate task. `make test` exports the same local-only `DATABASE_URL` default. Outside
+Make, set that single environment variable before running the database tests.
 
 ## Make targets
 
@@ -61,5 +84,5 @@ Issue #3 will add database configuration. It is not read by the current Settings
 | `make install` | Install the package with test and lint tools. |
 | `make test` | Run pytest with a writable temporary directory. |
 | `make lint` | Run Ruff lint and formatting checks. |
-| `make up` | Build and start the local Compose stack. |
+| `make up` | Build and start the local Compose stack in the background. |
 | `make down` | Stop the local Compose stack. |

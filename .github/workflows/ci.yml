@@ -6,6 +6,22 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: paper
+          POSTGRES_PASSWORD: paper
+          POSTGRES_DB: paper_trader
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U paper -d paper_trader"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      DATABASE_URL: postgresql+psycopg://paper:paper@localhost:5432/paper_trader
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7

@@ -22,6 +22,12 @@ def test_nested_environment_variable_overrides_default(monkeypatch) -> None:
     assert Settings().risk.risk_per_trade == Decimal("0.02")
 
 
+def test_database_url_uses_the_single_unprefixed_environment_variable(monkeypatch) -> None:
+    monkeypatch.setenv("DATABASE_URL", "postgresql+psycopg://paper:paper@localhost/paper_trader")
+
+    assert Settings().database_url == "postgresql+psycopg://paper:paper@localhost/paper_trader"
+
+
 def test_settings_have_no_exchange_key_or_order_placement_fields() -> None:
     prohibited = ("exchange", "api_key", "secret", "order_", "live_trading")
 

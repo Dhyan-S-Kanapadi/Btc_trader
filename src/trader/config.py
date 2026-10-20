@@ -62,3 +62,8 @@ class Settings(BaseSettings):
     costs: CostSettings = Field(
         default_factory=CostSettings, description="Cost assumptions section."
     )
+    database_url: str | None = Field(
+        default=None,
+        validation_alias="DATABASE_URL",
+        description="PostgreSQL connection URL; required only by database commands.",
+    )

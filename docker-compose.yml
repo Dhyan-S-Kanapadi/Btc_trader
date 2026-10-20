@@ -8,6 +8,8 @@ services:
       POSTGRES_DB: paper_trader
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
       interval: 5s
@@ -18,8 +20,8 @@ services:
   app:
     build: .
     environment:
-      # Local-only connection string. Issue #3 will own database configuration.
-      DATABASE_URL: postgresql://paper:paper@postgres:5432/paper_trader
+      # Local-only connection string. It is not a production credential.
+      DATABASE_URL: postgresql+psycopg://paper:paper@postgres:5432/paper_trader
     depends_on:
       postgres:
         condition: service_healthy

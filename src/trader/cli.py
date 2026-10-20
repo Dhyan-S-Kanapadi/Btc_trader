@@ -18,6 +18,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     parser = argparse.ArgumentParser(prog="trader", description="Paper-trading research CLI.")
     subcommands = parser.add_subparsers(dest="command")
+    subcommands.add_parser("migrate", help="Apply database migrations.")
     for command in _COMMAND_ISSUES:
         subcommands.add_parser(command, help=f"Reserved for issue #{_COMMAND_ISSUES[command]}.")
     return parser
@@ -30,6 +31,17 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.command is None:
         parser.print_help()
+        return 0
+
+    if args.command == "migrate":
+        from trader.config import Settings
+        from trader.db.migrations import upgrade_head
+
+        database_url = Settings().database_url
+        if database_url is None:
+            parser.error("DATABASE_URL is required for trader migrate")
+        upgrade_head(database_url)
+        configure_logging().info("database migrated", extra={"command": "migrate"})
         return 0
 
     issue = _COMMAND_ISSUES[args.command]
