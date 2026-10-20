@@ -74,6 +74,7 @@ def persist_replay(
                 entry_price=position.entry_price,
                 entry_time=position.entry_time,
                 stop_price=position.stop_price,
+                initial_stop_price=position.initial_stop_price,
                 exit_price=position.exit_price,
                 exit_time=position.exit_time,
                 fees=position.fees,

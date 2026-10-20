@@ -1,12 +1,14 @@
 """Small SQLAlchemy storage boundary for paper-trading state."""
 
+# ruff: noqa: E501
+
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Protocol
 from uuid import UUID
 
-from sqlalchemy import create_engine, select
+from sqlalchemy import create_engine, func, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import sessionmaker
 
@@ -410,6 +412,77 @@ class PostgresStorage:
     def load_account_state(self, account_id: str) -> AccountRow | None:
         with self._sessions() as session:
             return session.get(AccountRow, account_id)
+
+    def report_account_ids(self) -> list[str]:
+        """List configured paper accounts deterministically for the read-only report job."""
+
+        with self._sessions() as session:
+            return list(
+                session.scalars(select(AccountRow.account_id).order_by(AccountRow.account_id))
+            )
+
+    def load_report_rows(
+        self, account_id: str, start: datetime | None, end: datetime | None
+    ) -> tuple[
+        list[TradeRow],
+        list[EquityPointRow],
+        list[str],
+        tuple[datetime | None, datetime | None],
+        int,
+        int,
+        dict[str, object] | None,
+        dict[str, object] | None,
+    ]:
+        """Load only report inputs; this method deliberately issues SELECT statements only."""
+
+        trade_query = select(TradeRow).where(TradeRow.account_id == account_id)
+        equity_query = select(EquityPointRow).where(EquityPointRow.account_id == account_id)
+        candidate_query = (
+            select(CandidateRow.idempotency_key, CandidateRow.signal_time)
+            .join(DecisionRow, DecisionRow.candidate_id == CandidateRow.id)
+            .where(DecisionRow.account_id == account_id)
+        )
+        if start is not None:
+            trade_query = trade_query.where(TradeRow.exit_time >= start)
+            equity_query = equity_query.where(EquityPointRow.recorded_at >= start)
+            candidate_query = candidate_query.where(CandidateRow.signal_time >= start)
+        if end is not None:
+            trade_query = trade_query.where(TradeRow.exit_time <= end)
+            equity_query = equity_query.where(EquityPointRow.recorded_at <= end)
+            candidate_query = candidate_query.where(CandidateRow.signal_time <= end)
+        with self._sessions() as session:
+            trades = session.scalars(trade_query.order_by(TradeRow.exit_time, TradeRow.id)).all()
+            equity = session.scalars(equity_query.order_by(EquityPointRow.recorded_at)).all()
+            candidates = session.execute(candidate_query.order_by(CandidateRow.signal_time)).all()
+            rejected = session.scalar(
+                select(func.count())
+                .select_from(DecisionRow)
+                .where(DecisionRow.account_id == account_id, DecisionRow.action != "TAKE")
+            )
+            open_positions = session.scalar(
+                select(func.count())
+                .select_from(PositionRow)
+                .where(PositionRow.account_id == account_id, PositionRow.exit_time.is_(None))
+            )
+            config = session.scalar(
+                select(ConfigRow.config).where(ConfigRow.account_id == account_id)
+            )
+            metadata = session.scalar(
+                select(RunMetadataRow.metadata_json)
+                .order_by(RunMetadataRow.started_at.desc(), RunMetadataRow.id.desc())
+                .limit(1)
+            )
+        times = [row.signal_time for row in candidates]
+        return (
+            trades,
+            equity,
+            [row.idempotency_key for row in candidates],
+            (min(times) if times else None, max(times) if times else None),
+            int(rejected or 0),
+            int(open_positions or 0),
+            config,
+            metadata,
+        )
 
     def save_decision_and_order(
         self, decision: DecisionWrite, order: OrderWrite

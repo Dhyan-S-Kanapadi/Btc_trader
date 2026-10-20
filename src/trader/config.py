@@ -1,5 +1,7 @@
 """Environment-backed configuration for paper-trading research."""
 
+# ruff: noqa: E501
+
 from decimal import Decimal
 
 from pydantic import BaseModel, Field
@@ -72,6 +74,14 @@ class DataSettings(BaseModel):
     backfill_days: int = Field(30, gt=0, description="Default number of days for CLI backfill.")
 
 
+class ReportSettings(BaseModel):
+    """Reporting assumptions; this threshold is not a validated statistical rule."""
+
+    report_min_trades: int = Field(
+        30, gt=0, description="Assumed minimum closed-trade sample size for a comparison warning."
+    )
+
+
 class Settings(BaseSettings):
     """All configuration sourced from environment variables or explicit test inputs."""
 
@@ -88,6 +98,9 @@ class Settings(BaseSettings):
     )
     data: DataSettings = Field(
         default_factory=DataSettings, description="Public market-data section."
+    )
+    report: ReportSettings = Field(
+        default_factory=ReportSettings, description="Report assumptions section."
     )
     database_url: str | None = Field(
         default=None,
