@@ -20,6 +20,7 @@ from .models import (
     EquityPointRow,
     OrderRow,
     PositionRow,
+    RunMetadataRow,
     SnapshotRow,
     TradeRow,
 )
@@ -68,6 +69,14 @@ class PaperStorage(Protocol):
     ) -> list[datetime]: ...
 
     def latest_candle_time(self, symbol: str, interval: str) -> datetime | None: ...
+
+    def load_candles(
+        self, symbol: str, interval: str, start: datetime | None = None, end: datetime | None = None
+    ) -> list[Candle]: ...
+
+    def account_has_replay_rows(self, account_id: str) -> bool: ...
+
+    def candle_id(self, symbol: str, interval: str, open_time: datetime) -> UUID: ...
 
     def save_candidate(self, candidate: Candidate, candle_id: UUID) -> UUID: ...
 
@@ -177,6 +186,67 @@ class PostgresStorage:
                 .limit(1)
             )
         return None if value is None else value.astimezone(UTC)
+
+    def load_candles(
+        self, symbol: str, interval: str, start: datetime | None = None, end: datetime | None = None
+    ) -> list[Candle]:
+        """Load shared candles in chronological order for a replay."""
+
+        statement = select(CandleRow).where(
+            CandleRow.symbol == symbol, CandleRow.interval == interval
+        )
+        if start is not None:
+            statement = statement.where(CandleRow.open_time >= start)
+        if end is not None:
+            statement = statement.where(CandleRow.open_time <= end)
+        with self._sessions() as session:
+            rows = session.scalars(statement.order_by(CandleRow.open_time)).all()
+        return [
+            Candle(
+                symbol=row.symbol,
+                open_time=row.open_time.astimezone(UTC),
+                open=row.open,
+                high=row.high,
+                low=row.low,
+                close=row.close,
+                volume=row.volume,
+            )
+            for row in rows
+        ]
+
+    def account_has_replay_rows(self, account_id: str) -> bool:
+        """Return whether replay persistence would mix with existing account state."""
+
+        with self._sessions() as session:
+            return any(
+                session.scalar(select(model.id).where(model.account_id == account_id).limit(1))
+                is not None
+                for model in (DecisionRow, OrderRow, PositionRow, TradeRow, EquityPointRow)
+            )
+
+    def candle_id(self, symbol: str, interval: str, open_time: datetime) -> UUID:
+        """Return the durable natural-key candle identifier after an idempotent upsert."""
+
+        with self._sessions() as session:
+            value = session.scalar(
+                select(CandleRow.id).where(
+                    CandleRow.symbol == symbol,
+                    CandleRow.interval == interval,
+                    CandleRow.open_time == open_time,
+                )
+            )
+        if value is None:
+            raise LookupError("candle was not persisted")
+        return value
+
+    def save_run_metadata(self, kind: str, metadata: dict[str, object]) -> UUID:
+        """Persist deterministic replay metadata without credentials."""
+
+        with self._sessions.begin() as session:
+            row = RunMetadataRow(kind=kind, metadata_json=metadata)
+            session.add(row)
+            session.flush()
+            return row.id
 
     def save_candidate(self, candidate: Candidate, candle_id: UUID) -> UUID:
         with self._sessions.begin() as session:

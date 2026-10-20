@@ -151,6 +151,41 @@ Public requests retry network and 5xx failures with exponential jitter, respect 
 
 shortcut: Gap repair assumes fixed-duration intervals; add calendar-aware handling if month candles are supported.
 
+## Replay (synthetic only)
+
+The replay core is the pure `step(state, history, candle, policy, config)` function. For every
+closed candle it fills a prior pending entry at the new candle open, processes exits, marks equity,
+rolls the UTC day, then evaluates and queues a new candidate for the next open. It reuses the
+breakout, snapshot, risk, paper-fill, and exit-manager functions; it has no I/O, clock, random, or
+storage calls. `WAIT` is recorded but deliberately has no deferral behavior.
+
+`trader replay --source synthetic` generates deterministic `SYNTH-BTC` toy candles with a seed.
+**SYNTHETIC data is not market data and says nothing about strategy performance.** Results are
+written as `SYNTHETIC_` CSV/JSON files and a clearly labeled summary, with no wall-clock values, so
+the same inputs produce byte-identical files.
+
+```powershell
+trader replay --source synthetic --seed 1 --bars 3000 --policy take_all --output-dir replay-output
+```
+
+The volume-filter baseline accepts only candidate snapshots with `volume_ratio >= 1.5`; this is an
+assumption to test, not a validated threshold. `--source db` reads already-closed candles from
+PostgreSQL. `--persist` records decisions/orders atomically plus trades, equity points, and replay
+metadata, but it refuses an account that already has rows. Point every persisted replay at a fresh
+scratch database; never mix replay output with live data. The schema has no run identifier, so one
+database per persisted replay is the deliberate safety boundary until a later reporting design
+changes that.
+
+```powershell
+$env:DATABASE_URL = "postgresql+psycopg://paper:paper@localhost:5432/paper_trader"
+trader migrate
+trader replay --source synthetic --seed 1 --bars 3000 --persist --output-dir replay-output
+```
+
+Pending entries at the final bar are retained in the final state but never reported as trades.
+shortcut: Replay persistence stores final account state in the existing account row; add full
+pending-position restart serialization when live-worker recovery is introduced.
+
 ## Make targets
 
 | Target | Action |
