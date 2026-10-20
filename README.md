@@ -71,6 +71,15 @@ All fractions use `0.01` for 1%, not a percent number.
 The 96-bar trend SMA is an assumption to test. `snapshot_to_json` and `snapshot_from_json` provide
 lossless HTTP-ready JSON; any v1 field-set change requires a new schema version.
 
+## Risk engine
+
+The pure risk engine gates **new entries only**; exits belong to Issue #8. Limits come only from
+environment-backed `Settings`; no model or caller can override them. In order it checks: existing
+halt, stale data, UTC day rollover, drawdown halt, daily equity-loss cap, open-position cap,
+positive inputs, stop validity, then sizing. Daily loss compares marked equity (including caller
+marked unrealized P&L) to UTC `day_start_equity`. A drawdown halt persists until an external,
+audited reset. Entry price is an estimate at signal time; Issue #7 will re-size after actual fill.
+
 ## Docker and Compose
 
 The image uses Python 3.12 slim and runs the single `trader` CLI as a non-root user. The
