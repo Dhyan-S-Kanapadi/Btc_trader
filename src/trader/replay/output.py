@@ -56,6 +56,29 @@ def write_output(
     return paths
 
 
+def write_combined_summary(output_dir: Path, results: dict[str, ReplayResult]) -> Path:
+    """Write the small deterministic cross-account summary for a routed replay."""
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    path = output_dir / "combined_summary.json"
+    path.write_text(
+        json.dumps(
+            {
+                account_id: {
+                    "trades": len(result.trades),
+                    "decisions": len(result.decisions),
+                    "final_equity": str(result.state.risk.equity),
+                }
+                for account_id, result in sorted(results.items())
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        ),
+        encoding="utf-8",
+    )
+    return path
+
+
 def _write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
     fields = sorted({key for row in rows for key in row})
     with path.open("w", newline="", encoding="utf-8") as output:
