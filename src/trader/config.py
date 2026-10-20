@@ -39,6 +39,11 @@ class RiskSettings(BaseModel):
         Decimal("0.10"), gt=0, le=1, description="Assumed drawdown level that halts entries."
     )
     max_open_positions: int = Field(1, ge=1, description="Assumed maximum simultaneous positions.")
+    starting_equity: Decimal = Field(
+        Decimal("10000"),
+        gt=0,
+        description="Assumed paper-account starting equity in quote currency.",
+    )
 
 
 class CostSettings(BaseModel):

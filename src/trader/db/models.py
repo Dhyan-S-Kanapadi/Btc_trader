@@ -80,6 +80,7 @@ class AccountRow(Base):
     equity: Mapped[Decimal] = mapped_column(MONEY)
     peak_equity: Mapped[Decimal] = mapped_column(MONEY)
     halted: Mapped[bool] = mapped_column(default=False)
+    engine_state: Mapped[dict[str, object] | None] = mapped_column(JSON, nullable=True)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )

@@ -16,6 +16,7 @@ from .models import (
     AccountRow,
     CandidateRow,
     CandleRow,
+    ConfigRow,
     DecisionRow,
     EquityPointRow,
     OrderRow,
@@ -293,6 +294,53 @@ class PostgresStorage:
                     peak_equity,
                     halted,
                 )
+
+    def save_engine_state(self, account_id: str, state: dict[str, object]) -> None:
+        """Persist the complete serializable replay state for restart recovery."""
+
+        with self._sessions.begin() as session:
+            row = session.get(AccountRow, account_id)
+            if row is None:
+                raise LookupError(f"account does not exist: {account_id}")
+            row.engine_state = state
+
+    def load_engine_state(self, account_id: str) -> dict[str, object] | None:
+        """Load serialized replay state without retaining it in process memory."""
+
+        with self._sessions() as session:
+            row = session.get(AccountRow, account_id)
+            return None if row is None else row.engine_state
+
+    def seed_account(self, account_id: str, cash: Decimal, config: dict[str, object]) -> None:
+        """Create a paper account/config only when absent; never overwrite operator changes."""
+
+        with self._sessions.begin() as session:
+            if session.get(AccountRow, account_id) is None:
+                session.add(
+                    AccountRow(
+                        account_id=account_id,
+                        cash=cash,
+                        equity=cash,
+                        peak_equity=cash,
+                        halted=False,
+                    )
+                )
+            if (
+                session.scalar(select(ConfigRow.id).where(ConfigRow.account_id == account_id))
+                is None
+            ):
+                session.add(ConfigRow(account_id=account_id, config=config))
+
+    def load_account_config(self, account_id: str) -> dict[str, object]:
+        """Load non-secret account config or fail before routing begins."""
+
+        with self._sessions() as session:
+            config = session.scalar(
+                select(ConfigRow.config).where(ConfigRow.account_id == account_id)
+            )
+        if config is None:
+            raise LookupError(f"account config does not exist: {account_id}")
+        return config
 
     def load_account_state(self, account_id: str) -> AccountRow | None:
         with self._sessions() as session:

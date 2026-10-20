@@ -23,6 +23,7 @@ def build_parser() -> argparse.ArgumentParser:
     subcommands.add_parser("migrate", help="Apply database migrations.")
     backfill = subcommands.add_parser("backfill", help="Fetch public closed market-data candles.")
     backfill.add_argument("--days", type=int, help="Number of days to backfill.")
+    subcommands.add_parser("seed-accounts", help="Idempotently seed paper accounts A through D.")
     replay = subcommands.add_parser("replay", help="Run an offline paper-trading replay.")
     replay.add_argument("--source", choices=("synthetic", "db"), default="synthetic")
     replay.add_argument("--seed", type=int, default=1)
@@ -85,6 +86,34 @@ def main(argv: Sequence[str] | None = None) -> int:
         configure_logging().info(
             "backfill complete", extra={"command": "backfill", "written": written}
         )
+        return 0
+
+    if args.command == "seed-accounts":
+        from trader.config import Settings
+        from trader.db.storage import PostgresStorage
+
+        settings = Settings()
+        if settings.database_url is None:
+            parser.error("DATABASE_URL is required for trader seed-accounts")
+        storage = PostgresStorage(settings.database_url)
+        for account_id, policy_name in (
+            ("A", "take_all"),
+            ("B", "skip_all"),
+            ("C", "skip_all"),
+            ("D", "skip_all"),
+        ):
+            storage.seed_account(
+                account_id,
+                settings.risk.starting_equity,
+                {
+                    "account_id": account_id,
+                    "label": f"Paper account {account_id}",
+                    "policy_name": policy_name,
+                    "starting_equity": str(settings.risk.starting_equity),
+                    "enabled": True,
+                },
+            )
+        configure_logging().info("paper accounts seeded", extra={"command": "seed-accounts"})
         return 0
 
     if args.command == "replay":
