@@ -40,6 +40,19 @@ application does not require or load a dotenv file.
 Prices and quantities use `Decimal`, rather than `float`, so later accounting and fee
 calculations do not inherit binary floating-point rounding errors.
 
+## Breakout rule
+
+The proposed rule evaluates only information available at each closed candle. True range is
+`max(high - low, abs(high - previous close), abs(low - previous close))`; the first candle has no
+previous close, so it has no true range. ATR is the simple average of the trailing configured
+`atr_period` true ranges, including the signal candle, and is unavailable until that history exists.
+
+A candidate requires its close to be strictly above the highest high of the prior configured
+`breakout_lookback` candles. The signal candle is excluded from that level. Its stable idempotency
+key is `<symbol>:<interval>:<signal-time-UTC-ISO-8601>`; it does not contain the series-local bar
+index, so it remains the same when the same candle is evaluated from a later slice. Signal time is
+the candle `open_time`, because that is the timestamp available on the shared `Candle` type.
+
 ## Docker and Compose
 
 The image uses Python 3.12 slim and runs the single `trader` CLI as a non-root user. The
