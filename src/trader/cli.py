@@ -1,5 +1,7 @@
 """Temporary command-line entrypoint for future paper-trading services."""
 
+# ruff: noqa: E501
+
 import argparse
 from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
@@ -34,7 +36,14 @@ def build_parser() -> argparse.ArgumentParser:
     replay.add_argument("--policy", choices=("take_all", "volume_filter"), default="take_all")
     replay.add_argument("--output-dir", type=Path, default=Path("replay-output"))
     replay.add_argument("--persist", action="store_true")
-    for command in ("worker", "api", "report"):
+    report = subcommands.add_parser("report", help="Write a read-only account comparison report.")
+    report.add_argument(
+        "--accounts", help="Comma-separated accounts; defaults to all configured accounts."
+    )
+    report.add_argument("--start", help="Inclusive UTC ISO-8601 timestamp.")
+    report.add_argument("--end", help="Inclusive UTC ISO-8601 timestamp.")
+    report.add_argument("--output-dir", type=Path, default=Path("report-output"))
+    for command in ("worker", "api"):
         subcommands.add_parser(command, help=f"Reserved for issue #{_COMMAND_ISSUES[command]}.")
     return parser
 
@@ -226,6 +235,35 @@ def main(argv: Sequence[str] | None = None) -> int:
                 "trades": sum(len(result.trades) for result in results.values()),
             },
         )
+        return 0
+
+    if args.command == "report":
+        from trader.config import Settings
+        from trader.db.storage import PostgresStorage
+        from trader.report.service import build_report, write_report
+
+        settings = Settings()
+        if settings.database_url is None:
+            parser.error("DATABASE_URL is required for trader report")
+        storage = PostgresStorage(settings.database_url)
+        account_ids = (
+            [part.strip() for part in args.accounts.split(",") if part.strip()]
+            if args.accounts
+            else storage.report_account_ids()
+        )
+        if not account_ids:
+            parser.error("no configured accounts")
+        start = datetime.fromisoformat(args.start).astimezone(UTC) if args.start else None
+        end = datetime.fromisoformat(args.end).astimezone(UTC) if args.end else None
+        metrics, warnings, metadata = build_report(storage, account_ids, start, end)
+        if not any(
+            value.trade_count or value.total_return is not None for value in metrics.values()
+        ):
+            parser.error("no report data for selected accounts")
+        write_report(
+            args.output_dir, metrics, warnings, metadata, settings.report.report_min_trades
+        )
+        configure_logging().info("report complete", extra={"accounts": account_ids})
         return 0
 
     issue = _COMMAND_ISSUES[args.command]

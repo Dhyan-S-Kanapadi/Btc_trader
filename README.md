@@ -215,6 +215,21 @@ choices.
 
 shortcut: Completed trades are idempotently recognized by account, entry-candidate reason, and exit time; add a database unique constraint when the trade schema gains a durable execution identifier.
 
+## Variant report
+
+`trader report` is a read-only, one-off PostgreSQL job for comparing the selected paper accounts
+from one replay scratch database. It writes deterministic CSV, JSON, and Markdown files. Closed-trade
+metrics use after-fee net P&L: return is final/first equity minus one; drawdown is the largest
+peak-to-trough equity fraction; win rate is profitable closed trades/trades; profit factor is gross
+profit/gross loss; and Average R is net P&L divided by quantity times entry price minus the immutable
+initial stop. Open positions are excluded from trade metrics but their unrealized P&L remains in
+equity metrics. Profit factor is null when there are no losses.
+
+The report warns when accounts do not share candidate keys/candle ranges or have fewer than the
+assumed `TRADER_REPORT__REPORT_MIN_TRADES=30` closed trades. This is an assumption, not a validated
+threshold. It reports missing stored cost/strategy metadata as missing rather than using current
+settings. Results are a sample, never a forecast; synthetic reports are explicitly labeled.
+
 ## Make targets
 
 | Target | Action |
