@@ -1,6 +1,6 @@
 """Tests for validated frozen core types."""
 
-from datetime import datetime
+from datetime import UTC, datetime
 from decimal import Decimal
 
 import pytest
@@ -35,7 +35,12 @@ def test_verdict_rejects_extra_fields_and_invalid_actions() -> None:
 
 def test_snapshot_json_round_trip_is_lossless() -> None:
     snapshot = Snapshot(
-        schema_version=1,
+        idempotency_key="BTCUSDT:1h:2026-01-01T00:00:00+00:00",
+        symbol="BTCUSDT",
+        signal_time=datetime(2026, 1, 1, tzinfo=UTC),
+        reference_price=Decimal("100"),
+        atr=Decimal("2"),
+        breakout_level=Decimal("99"),
         volume_ratio=Decimal("1.25"),
         trend_vs_sma=Decimal("0.03"),
     )
