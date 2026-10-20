@@ -1,12 +1,13 @@
 """Small SQLAlchemy storage boundary for paper-trading state."""
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Protocol
 from uuid import UUID
 
 from sqlalchemy import create_engine, select
+from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import sessionmaker
 
 from trader.models import Candidate, Candle, Snapshot
@@ -60,6 +61,14 @@ class PaperStorage(Protocol):
 
     def save_candle(self, candle: Candle, interval: str) -> UUID: ...
 
+    def upsert_candles(self, candles: list[Candle], interval: str) -> int: ...
+
+    def candle_times(
+        self, symbol: str, interval: str, start: datetime, end: datetime
+    ) -> list[datetime]: ...
+
+    def latest_candle_time(self, symbol: str, interval: str) -> datetime | None: ...
+
     def save_candidate(self, candidate: Candidate, candle_id: UUID) -> UUID: ...
 
     def save_snapshot(self, candidate_id: UUID, snapshot: Snapshot) -> UUID: ...
@@ -110,6 +119,64 @@ class PostgresStorage:
             session.add(row)
             session.flush()
             return row.id
+
+    def upsert_candles(self, candles: list[Candle], interval: str) -> int:
+        """Insert or refresh shared candles by their natural unique key."""
+
+        if not candles:
+            return 0
+        values = [
+            {
+                "symbol": candle.symbol,
+                "interval": interval,
+                "open_time": candle.open_time,
+                "open": candle.open,
+                "high": candle.high,
+                "low": candle.low,
+                "close": candle.close,
+                "volume": candle.volume,
+            }
+            for candle in candles
+        ]
+        statement = insert(CandleRow).values(values)
+        statement = statement.on_conflict_do_update(
+            constraint="candles_symbol_interval_open_time_key",
+            set_={
+                name: getattr(statement.excluded, name)
+                for name in values[0]
+                if name != "symbol" and name != "interval" and name != "open_time"
+            },
+        )
+        with self._sessions.begin() as session:
+            session.execute(statement)
+        return len(candles)
+
+    def candle_times(
+        self, symbol: str, interval: str, start: datetime, end: datetime
+    ) -> list[datetime]:
+        with self._sessions() as session:
+            return list(
+                session.scalars(
+                    select(CandleRow.open_time)
+                    .where(
+                        CandleRow.symbol == symbol,
+                        CandleRow.interval == interval,
+                        CandleRow.open_time >= start,
+                        CandleRow.open_time <= end,
+                    )
+                    .order_by(CandleRow.open_time)
+                )
+            )
+
+    def latest_candle_time(self, symbol: str, interval: str) -> datetime | None:
+        with self._sessions() as session:
+            value = session.scalar(
+                select(CandleRow.open_time)
+                .where(CandleRow.symbol == symbol, CandleRow.interval == interval)
+                .order_by(CandleRow.open_time.desc())
+                .limit(1)
+            )
+        return None if value is None else value.astimezone(UTC)
 
     def save_candidate(self, candidate: Candidate, candle_id: UUID) -> UUID:
         with self._sessions.begin() as session:

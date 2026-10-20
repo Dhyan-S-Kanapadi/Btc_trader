@@ -125,6 +125,32 @@ make down
 one-off Fargate task. `make test` exports the same local-only `DATABASE_URL` default. Outside
 Make, set that single environment variable before running the database tests.
 
+## Public Binance candle ingestion
+
+Issue #9 reads only the unauthenticated public `GET /api/v3/klines` endpoint at
+`https://data-api.binance.vision`; it has no exchange credentials, account access, or order
+operations. Binance returns a 12-item kline array: open time, OHLC and volume fields, close time,
+then market statistics. Prices and volumes are parsed as `Decimal`. Requests use the strategy
+symbol and interval, page forward from `startTime`, and retain only rows whose close time is no
+later than the passed current UTC time.
+
+`trader backfill` stores candles under the existing `(symbol, interval, open_time)` unique key, so
+reruns are idempotent. It detects missing interval timestamps and makes one additional request per
+gap. `latest_freshness` reports data stale when no candle exists or its latest open time is more
+than two intervals old; the risk engine does not import it yet.
+
+```powershell
+$env:DATABASE_URL = "postgresql+psycopg://paper:paper@localhost:5432/paper_trader"
+trader migrate
+trader backfill --days 30
+```
+
+Public requests retry network and 5xx failures with exponential jitter, respect `Retry-After` on
+429, and stop immediately on 418. `TRADER_DATA__BASE_URL`, `TIMEOUT_SECONDS`, `MAX_RETRIES`,
+`MAX_RETRY_SECONDS`, and `BACKFILL_DAYS` are documented in `.env.example`.
+
+shortcut: Gap repair assumes fixed-duration intervals; add calendar-aware handling if month candles are supported.
+
 ## Make targets
 
 | Target | Action |
