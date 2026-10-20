@@ -39,3 +39,27 @@ application does not require or load a dotenv file.
 
 Prices and quantities use `Decimal`, rather than `float`, so later accounting and fee
 calculations do not inherit binary floating-point rounding errors.
+
+## Docker and Compose
+
+The image uses Python 3.12 slim and runs the single `trader` CLI as a non-root user. The
+Compose stack starts local-only PostgreSQL 16, waits for its health check, then runs
+`trader --help`. It does not implement database access or trading logic.
+
+```powershell
+docker compose up --build
+docker compose down
+```
+
+`DATABASE_URL` is passed to the app container only as a local Compose environment value;
+Issue #3 will add database configuration. It is not read by the current Settings class.
+
+## Make targets
+
+| Target | Action |
+| --- | --- |
+| `make install` | Install the package with test and lint tools. |
+| `make test` | Run pytest with a writable temporary directory. |
+| `make lint` | Run Ruff lint and formatting checks. |
+| `make up` | Build and start the local Compose stack. |
+| `make down` | Stop the local Compose stack. |
