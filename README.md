@@ -33,7 +33,7 @@ application does not require or load a dotenv file.
 
 | Section | Assumption defaults |
 | --- | --- |
-| Strategy | `BTCUSDT`, `1h`, 24-bar breakout lookback, 14-bar ATR, 1.5 initial-stop ATR, 2.0 trailing-stop ATR, 48-bar time stop |
+| Strategy | `BTCUSDT`, `1h`, 24-bar breakout lookback, 14-bar ATR, 96-bar trend SMA, 1.5 initial-stop ATR, 2.0 trailing-stop ATR, 48-bar time stop |
 | Risk | 1% risk per trade, 3% daily loss cap, 10% drawdown halt, one open position |
 | Costs | 10 bps fee per side and 5 bps slippage |
 
@@ -52,6 +52,24 @@ A candidate requires its close to be strictly above the highest high of the prio
 key is `<symbol>:<interval>:<signal-time-UTC-ISO-8601>`; it does not contain the series-local bar
 index, so it remains the same when the same candle is evaluated from a later slice. Signal time is
 the candle `open_time`, because that is the timestamp available on the shared `Candle` type.
+
+## Evidence snapshots
+
+`build_snapshot` freezes v1 JSON evidence at the candidate candle. It internally slices candles at
+the signal timestamp, so later candles cannot affect the result. The self-contained fields are
+`schema_version`, idempotency key, symbol, signal time, reference price, ATR, and breakout level.
+All fractions use `0.01` for 1%, not a percent number.
+
+| Field | Definition |
+| --- | --- |
+| `volume_ratio` | Signal volume divided by the mean of the prior `breakout_lookback` volumes; null without enough history or a zero mean. |
+| `breakout_strength_atr` | `(reference_price - breakout_level) / atr`, in ATR units. |
+| `atr_pct` | `atr / reference_price`, as a fraction. |
+| `range_24h_pct` | `(highest high - lowest low) / reference_price` over the final inclusive `breakout_lookback` candles; null without enough history. |
+| `trend_vs_sma` | `reference_price / SMA(close, trend_sma_period) - 1`, including the signal candle; null without enough history. |
+
+The 96-bar trend SMA is an assumption to test. `snapshot_to_json` and `snapshot_from_json` provide
+lossless HTTP-ready JSON; any v1 field-set change requires a new schema version.
 
 ## Docker and Compose
 

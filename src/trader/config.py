@@ -13,6 +13,7 @@ class StrategySettings(BaseModel):
     interval: str = Field("1h", description="Assumed candle interval.")
     breakout_lookback: int = Field(24, gt=0, description="Assumed breakout lookback in bars.")
     atr_period: int = Field(14, gt=0, description="Assumed ATR period in bars.")
+    trend_sma_period: int = Field(96, gt=0, description="Assumed trend SMA period in bars.")
     initial_stop_atr_mult: Decimal = Field(
         Decimal("1.5"), gt=0, description="Assumed initial stop distance in ATRs."
     )
