@@ -44,6 +44,19 @@ def test_bounded_history_matches_full_history_for_result() -> None:
     assert len(result.equity) == len(candles)
 
 
+def test_future_candles_cannot_change_prior_events_or_equity() -> None:
+    candles = generate_candles(5, 180, datetime(2026, 1, 1, tzinfo=UTC), "1h")
+    cutoff = 120
+    prefix = run_replay(candles[:cutoff], TakeAllPolicy(), _config())
+    full = run_replay(candles, TakeAllPolicy(), _config())
+    assert prefix.decisions == tuple(
+        decision
+        for decision in full.decisions
+        if decision.candidate.signal_time < candles[cutoff].open_time
+    )
+    assert prefix.equity == full.equity[:cutoff]
+
+
 def test_step_is_pure_for_same_inputs() -> None:
     candles = generate_candles(3, 120, datetime(2026, 1, 1, tzinfo=UTC), "1h")
     config = _config()

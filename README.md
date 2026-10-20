@@ -169,8 +169,22 @@ trader replay --source synthetic --seed 1 --bars 3000 --policy take_all --output
 ```
 
 The volume-filter baseline accepts only candidate snapshots with `volume_ratio >= 1.5`; this is an
-assumption to test, not a validated threshold. Database replay and persistence are not available in
-this revision.
+assumption to test, not a validated threshold. `--source db` reads already-closed candles from
+PostgreSQL. `--persist` records decisions/orders atomically plus trades, equity points, and replay
+metadata, but it refuses an account that already has rows. Point every persisted replay at a fresh
+scratch database; never mix replay output with live data. The schema has no run identifier, so one
+database per persisted replay is the deliberate safety boundary until a later reporting design
+changes that.
+
+```powershell
+$env:DATABASE_URL = "postgresql+psycopg://paper:paper@localhost:5432/paper_trader"
+trader migrate
+trader replay --source synthetic --seed 1 --bars 3000 --persist --output-dir replay-output
+```
+
+Pending entries at the final bar are retained in the final state but never reported as trades.
+shortcut: Replay persistence stores final account state in the existing account row; add full
+pending-position restart serialization when live-worker recovery is introduced.
 
 ## Make targets
 

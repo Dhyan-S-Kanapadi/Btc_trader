@@ -9,10 +9,18 @@ from sqlalchemy import inspect
 from sqlalchemy.exc import IntegrityError
 
 from trader.cli import main
+from trader.config import Settings
 from trader.db.migrations import downgrade_base, upgrade_head
 from trader.db.models import DecisionRow, OrderRow
 from trader.db.storage import DecisionWrite, OrderWrite, PostgresStorage
 from trader.models import Candidate, Candle
+from trader.replay import (
+    TakeAllPolicy,
+    generate_candles,
+    persist_replay,
+    refuse_nonempty_account,
+    run_replay,
+)
 
 EXPECTED_TABLES = {
     "accounts",
@@ -144,3 +152,22 @@ def test_candle_upsert_is_idempotent(storage: PostgresStorage) -> None:
     storage.upsert_candles([candle], "1h")
     storage.upsert_candles([candle], "1h")
     assert storage.candle_times("BTCUSDT", "1h", candle_time, candle_time) == [candle_time]
+
+
+def test_persisted_synthetic_replay_refuses_account_reuse(storage: PostgresStorage) -> None:
+    base = Settings()
+    config = base.model_copy(
+        update={"strategy": base.strategy.model_copy(update={"symbol": "SYNTH-BTC"})}
+    )
+    candles = generate_candles(1, 150, datetime(2026, 1, 1, tzinfo=UTC), "1h")
+    result = run_replay(candles, TakeAllPolicy(), config)
+    persist_replay(
+        storage,
+        candles,
+        "1h",
+        result,
+        {"source": "synthetic", "seed": 1, "policy": "take_all"},
+    )
+    assert storage.account_has_replay_rows("A")
+    with pytest.raises(ValueError, match="empty scratch-database account"):
+        refuse_nonempty_account(storage, "A")

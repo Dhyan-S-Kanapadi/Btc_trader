@@ -65,7 +65,21 @@ def persist_replay(
     for point in result.equity:
         storage.save_equity_point(state.account_id, point.recorded_at, point.equity)
     if state.position is not None:
-        storage.save_position(PositionRow(**state.position.model_dump()))
+        position = state.position
+        storage.save_position(
+            PositionRow(
+                account_id=position.account_id,
+                symbol=position.symbol,
+                qty=position.qty,
+                entry_price=position.entry_price,
+                entry_time=position.entry_time,
+                stop_price=position.stop_price,
+                exit_price=position.exit_price,
+                exit_time=position.exit_time,
+                fees=position.fees,
+                reason=position.reason,
+            )
+        )
     storage.save_run_metadata(
         "SYNTHETIC_REPLAY" if metadata.get("source") == "synthetic" else "REPLAY", metadata
     )
