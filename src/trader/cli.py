@@ -3,6 +3,7 @@
 import argparse
 from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 
 from trader.logging import configure_logging
 
@@ -22,7 +23,17 @@ def build_parser() -> argparse.ArgumentParser:
     subcommands.add_parser("migrate", help="Apply database migrations.")
     backfill = subcommands.add_parser("backfill", help="Fetch public closed market-data candles.")
     backfill.add_argument("--days", type=int, help="Number of days to backfill.")
-    for command in _COMMAND_ISSUES:
+    replay = subcommands.add_parser("replay", help="Run an offline paper-trading replay.")
+    replay.add_argument("--source", choices=("synthetic", "db"), default="synthetic")
+    replay.add_argument("--seed", type=int, default=1)
+    replay.add_argument("--bars", type=int, default=3000)
+    replay.add_argument("--start", help="Inclusive UTC ISO-8601 timestamp for database replay.")
+    replay.add_argument("--end", help="Inclusive UTC ISO-8601 timestamp for database replay.")
+    replay.add_argument("--account", default="A")
+    replay.add_argument("--policy", choices=("take_all", "volume_filter"), default="take_all")
+    replay.add_argument("--output-dir", type=Path, default=Path("replay-output"))
+    replay.add_argument("--persist", action="store_true")
+    for command in ("worker", "api", "report"):
         subcommands.add_parser(command, help=f"Reserved for issue #{_COMMAND_ISSUES[command]}.")
     return parser
 
@@ -73,6 +84,73 @@ def main(argv: Sequence[str] | None = None) -> int:
             ingestor.close()
         configure_logging().info(
             "backfill complete", extra={"command": "backfill", "written": written}
+        )
+        return 0
+
+    if args.command == "replay":
+        from trader.config import Settings
+        from trader.db.storage import PostgresStorage
+        from trader.replay import (
+            TakeAllPolicy,
+            VolumeFilterPolicy,
+            generate_candles,
+            persist_replay,
+            refuse_nonempty_account,
+            run_replay,
+            write_output,
+        )
+
+        if args.bars <= 0:
+            parser.error("--bars must be positive")
+        base = Settings()
+        settings = (
+            base
+            if args.source == "db"
+            else base.model_copy(
+                update={"strategy": base.strategy.model_copy(update={"symbol": "SYNTH-BTC"})}
+            )
+        )
+        policy = (
+            TakeAllPolicy()
+            if args.policy == "take_all"
+            else VolumeFilterPolicy(settings.strategy.volume_ratio_min)
+        )
+        storage = None
+        if args.source == "synthetic":
+            candles = generate_candles(
+                args.seed, args.bars, datetime(2026, 1, 1, tzinfo=UTC), settings.strategy.interval
+            )
+        else:
+            if base.database_url is None:
+                parser.error("DATABASE_URL is required for database replay")
+            storage = PostgresStorage(base.database_url)
+            start = datetime.fromisoformat(args.start).astimezone(UTC) if args.start else None
+            end = datetime.fromisoformat(args.end).astimezone(UTC) if args.end else None
+            candles = storage.load_candles(
+                settings.strategy.symbol, settings.strategy.interval, start, end
+            )
+        result = run_replay(candles, policy, settings, args.account)
+        write_output(args.output_dir, result, settings, args.seed, args.policy, args.source)
+        if args.persist:
+            if storage is None:
+                if base.database_url is None:
+                    parser.error("DATABASE_URL is required for --persist")
+                storage = PostgresStorage(base.database_url)
+            refuse_nonempty_account(storage, args.account)
+            persist_replay(
+                storage,
+                candles,
+                settings.strategy.interval,
+                result,
+                {"source": args.source, "seed": args.seed, "policy": args.policy},
+            )
+        configure_logging().info(
+            "replay complete",
+            extra={
+                "source": args.source.upper(),
+                "trades": len(result.trades),
+                "final_equity": str(result.state.risk.equity),
+            },
         )
         return 0
 

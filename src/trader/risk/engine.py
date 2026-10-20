@@ -48,6 +48,17 @@ def mark_equity(state: AccountState, equity: Decimal) -> AccountState:
     )
 
 
+def roll_day(state: AccountState, equity: Decimal, now: datetime) -> AccountState:
+    """Mark UTC-day rollover before entry evaluation so day-start equity is the first bar mark."""
+
+    if now.tzinfo is None or now.utcoffset() != UTC.utcoffset(now):
+        raise ValueError("now must be timezone-aware UTC")
+    marked = mark_equity(state, equity)
+    if marked.current_day == now.date():
+        return marked
+    return marked.model_copy(update={"current_day": now.date(), "day_start_equity": equity})
+
+
 def evaluate_entry(
     candidate: Candidate,
     entry_price: Decimal,

@@ -21,6 +21,9 @@ class StrategySettings(BaseModel):
         Decimal("2.0"), gt=0, description="Assumed trailing stop distance in ATRs."
     )
     time_stop_bars: int = Field(48, gt=0, description="Assumed maximum holding period in bars.")
+    volume_ratio_min: Decimal = Field(
+        Decimal("1.5"), gt=0, description="Assumed minimum volume ratio for replay filtering."
+    )
 
 
 class RiskSettings(BaseModel):

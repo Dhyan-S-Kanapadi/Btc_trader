@@ -1,0 +1,73 @@
+"""Tests for the deterministic, offline replay core."""
+
+from datetime import UTC, datetime
+from decimal import Decimal
+
+from trader.config import Settings
+from trader.replay import TakeAllPolicy, VolumeFilterPolicy, generate_candles, run_replay, step
+from trader.replay.engine import ReplayState
+from trader.risk import AccountState
+
+
+def _config() -> Settings:
+    base = Settings()
+    return base.model_copy(
+        update={"strategy": base.strategy.model_copy(update={"symbol": "SYNTH-BTC"})}
+    )
+
+
+def test_synthetic_candles_are_seeded_valid_and_clearly_labeled() -> None:
+    start = datetime(2026, 1, 1, tzinfo=UTC)
+    assert generate_candles(1, 20, start, "1h") == generate_candles(1, 20, start, "1h")
+    for candle in generate_candles(1, 20, start, "1h"):
+        assert candle.symbol == "SYNTH-BTC"
+        assert (
+            candle.low
+            <= min(candle.open, candle.close)
+            <= max(candle.open, candle.close)
+            <= candle.high
+        )
+
+
+def test_replay_is_deterministic_and_offline() -> None:
+    candles = generate_candles(1, 200, datetime(2026, 1, 1, tzinfo=UTC), "1h")
+    first = run_replay(candles, TakeAllPolicy(), _config())
+    second = run_replay(candles, TakeAllPolicy(), _config())
+    assert first.trades == second.trades
+    assert first.decisions == second.decisions
+    assert first.equity == second.equity
+
+
+def test_bounded_history_matches_full_history_for_result() -> None:
+    candles = generate_candles(2, 200, datetime(2026, 1, 1, tzinfo=UTC), "1h")
+    result = run_replay(candles, TakeAllPolicy(), _config())
+    assert len(result.equity) == len(candles)
+
+
+def test_step_is_pure_for_same_inputs() -> None:
+    candles = generate_candles(3, 120, datetime(2026, 1, 1, tzinfo=UTC), "1h")
+    config = _config()
+    state = ReplayState(
+        account_id="A",
+        cash=Decimal("10000"),
+        risk=AccountState(
+            account_id="A",
+            equity=Decimal("10000"),
+            peak_equity=Decimal("10000"),
+            day_start_equity=Decimal("10000"),
+            current_day=candles[0].open_time.date(),
+            open_position_count=0,
+        ),
+    )
+    history = candles[:100]
+    assert step(state, history, history[-1], TakeAllPolicy(), config) == step(
+        state, history, history[-1], TakeAllPolicy(), config
+    )
+
+
+def test_volume_filter_baseline_can_skip() -> None:
+    candles = generate_candles(4, 150, datetime(2026, 1, 1, tzinfo=UTC), "1h")
+    assert (
+        run_replay(candles, VolumeFilterPolicy(Decimal("999")), _config()).decisions
+        != run_replay(candles, TakeAllPolicy(), _config()).decisions
+    )
