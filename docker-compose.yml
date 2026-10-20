@@ -1,0 +1,29 @@
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      # Local development defaults only. They are not production credentials.
+      POSTGRES_USER: paper
+      POSTGRES_PASSWORD: paper
+      POSTGRES_DB: paper_trader
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+
+  app:
+    build: .
+    environment:
+      # Local-only connection string. Issue #3 will own database configuration.
+      DATABASE_URL: postgresql://paper:paper@postgres:5432/paper_trader
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: ["--help"]
+
+volumes:
+  postgres_data:
