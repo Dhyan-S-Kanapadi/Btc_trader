@@ -54,14 +54,27 @@ class Candidate(FrozenModel):
 
 
 class Snapshot(FrozenModel):
-    """Evidence captured at signal time; calculation is intentionally out of scope."""
+    """Version-1 agent evidence: fractions are ratios (0.01 is 1%), never percent numbers.
 
-    schema_version: int = Field(ge=1)
+    `volume_ratio` uses prior-lookback volume, `breakout_strength_atr` is breakout distance in
+    ATR units, `atr_pct` is ATR/reference price, `range_24h_pct` is inclusive-window range/reference
+    price, and `trend_vs_sma` is reference price/SMA minus one.
+    """
+
+    schema_version: Literal[1] = 1
+    idempotency_key: str = Field(min_length=1)
+    symbol: str = Field(min_length=1)
+    signal_time: datetime
+    reference_price: Decimal = Field(gt=0)
+    atr: Decimal = Field(gt=0)
+    breakout_level: Decimal = Field(gt=0)
     volume_ratio: Decimal | None = None
     breakout_strength_atr: Decimal | None = None
-    atr_percent: Decimal | None = None
-    range_percent: Decimal | None = None
+    atr_pct: Decimal | None = None
+    range_24h_pct: Decimal | None = None
     trend_vs_sma: Decimal | None = None
+
+    _validate_signal_time = field_validator("signal_time")(_utc_datetime)
 
 
 class Verdict(FrozenModel):
@@ -85,6 +98,10 @@ class Position(FrozenModel):
     exit_time: datetime | None = None
     fees: Decimal = Field(default=Decimal("0"), ge=0)
     reason: str = Field(min_length=1)
+    entry_fee: Decimal = Field(default=Decimal("0"), ge=0)
+    highest_high_since_entry: Decimal | None = Field(default=None, gt=0)
+    bars_held: int = Field(default=0, ge=0)
+    time_stop_exit_due: bool = False
 
     _validate_entry_time = field_validator("entry_time")(_utc_datetime)
 
