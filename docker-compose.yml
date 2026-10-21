@@ -32,6 +32,7 @@ services:
     build: .
     environment:
       DATABASE_URL_READONLY: postgresql+psycopg://paper_readonly:paper_readonly_local@postgres:5432/paper_trader
+      TRADER_API__ALLOWED_ORIGINS: ${TRADER_API__ALLOWED_ORIGINS:-http://localhost:5173}
     depends_on:
       postgres:
         condition: service_healthy
