@@ -34,6 +34,7 @@ class AccountConfig(FrozenModel):
     policy_name: str = Field(min_length=1)
     starting_equity: Decimal = Field(gt=0)
     enabled: bool = True
+    risk: dict[str, object] = Field(default_factory=dict)
 
 
 class SkipAllPolicy:

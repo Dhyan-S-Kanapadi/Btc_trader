@@ -248,6 +248,42 @@ candle may create a pending entry. This explicitly resolves the catch-up ambigui
 
 ## Variant report
 
+## Read-only API
+
+`trader api` serves paper-trading data only. It has no write routes, exchange credentials, signed
+requests, or order operations. It requires `DATABASE_URL_READONLY`; it deliberately never falls back
+to `DATABASE_URL`. Uvicorn binds `TRADER_API__HOST=0.0.0.0` and `TRADER_API__PORT=8000` by default.
+OpenAPI is available at `/docs` and `/openapi.json`.
+
+The API database role is created outside Alembic because role creation requires elevated database
+privileges that managed migrations should not hold. Local Compose applies
+[`docker/init-readonly.sql`](docker/init-readonly.sql) only to a fresh database volume. For RDS, run
+the same SQL once as an administrator, replacing the local-only password with a secret-manager value:
+
+```sql
+CREATE ROLE paper_readonly LOGIN PASSWORD '<managed-secret>' NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT;
+GRANT CONNECT ON DATABASE paper_trader TO paper_readonly;
+GRANT USAGE ON SCHEMA public TO paper_readonly;
+GRANT SELECT ON ALL TABLES IN SCHEMA public TO paper_readonly;
+ALTER DEFAULT PRIVILEGES FOR ROLE paper IN SCHEMA public GRANT SELECT ON TABLES TO paper_readonly;
+```
+
+The API also executes `SET default_transaction_read_only = on` when opening a connection. CORS has no
+wildcard default: set `TRADER_API__ALLOWED_ORIGINS` to comma-separated allowed origins; credentials
+are disabled and only `GET`/`OPTIONS` are allowed.
+
+All versioned endpoints use typed JSON models and offset pagination (`limit`, `offset`; default 100,
+hard maximum 500, rejected above that): `/v1/accounts`, `/v1/positions`, `/v1/trades`, `/v1/equity`,
+`/v1/pnl`, `/v1/risk`, and `/v1/decisions`. `/health` returns
+`{"status":"ok","paper_trading":true}` or `503`. List responses include `meta`; it marks
+synthetic replay metadata, or explicitly reports `metadata_status: "missing"`.
+
+`/v1/pnl` defines total P&L as latest equity minus stored starting equity (and total return as that
+fraction). Daily P&L is the final equity for each UTC day minus the previous UTC-day final equity;
+the first day uses starting equity. Closed-trade realized net P&L is returned separately per day.
+This is the explicit resolution of the daily-P&L ambiguity; it aligns with the report's after-fee
+trade arithmetic while preserving mark-to-market equity.
+
 `trader report` is a read-only, one-off PostgreSQL job for comparing the selected paper accounts
 from one replay scratch database. It writes deterministic CSV, JSON, and Markdown files. Closed-trade
 metrics use after-fee net P&L: return is final/first equity minus one; drawdown is the largest

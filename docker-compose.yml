@@ -8,6 +8,7 @@ services:
       POSTGRES_DB: paper_trader
     volumes:
       - postgres_data:/var/lib/postgresql/data
+      - ./docker/init-readonly.sql:/docker-entrypoint-initdb.d/10-readonly.sql:ro
     ports:
       - "5432:5432"
     healthcheck:
@@ -26,6 +27,15 @@ services:
       postgres:
         condition: service_healthy
     command: ["--help"]
+
+  api:
+    build: .
+    environment:
+      DATABASE_URL_READONLY: postgresql+psycopg://paper_readonly:paper_readonly_local@postgres:5432/paper_trader
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: ["api"]
 
 volumes:
   postgres_data:
