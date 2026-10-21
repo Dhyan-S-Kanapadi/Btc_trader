@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from trader.config import Settings
 from trader.db.models import (
     AccountRow,
+    CandleRow,
     ConfigRow,
     DecisionRow,
     EquityPointRow,
@@ -160,6 +161,24 @@ class DecisionsResponse(BaseModel):
     meta: Meta
 
 
+class ApiCandle(BaseModel):
+    symbol: str
+    interval: str
+    open_time: datetime
+    close_time: datetime
+    open: Decimal
+    high: Decimal
+    low: Decimal
+    close: Decimal
+    volume: Decimal
+
+
+class CandlesResponse(BaseModel):
+    items: list[ApiCandle]
+    as_of: datetime
+    meta: Meta
+
+
 def _utc(value: datetime | None) -> datetime | None:
     if value is None:
         return None
@@ -289,6 +308,49 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 ],
                 meta=database.meta(session),
             )
+
+    @app.get("/v1/candles", response_model=CandlesResponse)
+    def candles(
+        as_of: datetime,
+        limit: Limit,
+        symbol: str | None = None,
+        interval: str | None = None,
+    ) -> CandlesResponse:
+        """Return only candles whose derived close is known at the inclusive as-of boundary."""
+
+        as_of = _utc(as_of)
+        assert as_of is not None
+        symbol = symbol or settings.strategy.symbol
+        interval = interval or settings.strategy.interval
+        from trader.data.binance import interval_delta
+
+        close_delta = interval_delta(interval)
+        with database.session() as session:
+            rows = session.scalars(
+                select(CandleRow)
+                .where(
+                    CandleRow.symbol == symbol,
+                    CandleRow.interval == interval,
+                    CandleRow.open_time <= as_of - close_delta,
+                )
+                .order_by(CandleRow.open_time.desc())
+                .limit(limit)
+            ).all()
+            items = [
+                ApiCandle(
+                    symbol=row.symbol,
+                    interval=row.interval,
+                    open_time=row.open_time,
+                    close_time=row.open_time + close_delta,
+                    open=row.open,
+                    high=row.high,
+                    low=row.low,
+                    close=row.close,
+                    volume=row.volume,
+                )
+                for row in reversed(rows)
+            ]
+            return CandlesResponse(items=items, as_of=as_of, meta=database.meta(session))
 
     @app.get("/v1/trades", response_model=TradesResponse)
     def trades(
