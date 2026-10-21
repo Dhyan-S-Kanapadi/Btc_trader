@@ -57,6 +57,13 @@ class PendingEntry(FrozenModel):
     snapshot: Snapshot
 
 
+class SharedSignal(FrozenModel):
+    """Account-independent candidate evidence computed once by the router."""
+
+    candidate: Candidate
+    snapshot: Snapshot
+
+
 class ReplayState(FrozenModel):
     """Small immutable state for one account and no external resources."""
 
@@ -110,6 +117,9 @@ def step(
     candle: Candle,
     policy: DecisionPolicy,
     config: Settings,
+    signal: SharedSignal | None = None,
+    data_is_stale: bool = False,
+    allow_entries: bool = True,
 ) -> StepResult:
     """Process one closed candle: fill, exit, mark/roll day, then signal and queue next entry."""
 
@@ -130,7 +140,7 @@ def step(
             estimated,
             risk.model_copy(update={"open_position_count": 0}),
             candle.open_time,
-            False,
+            data_is_stale,
             config,
         )
         risk = fill_risk.updated_state
@@ -150,6 +160,7 @@ def step(
                     entry_price=entry.price,
                     entry_time=entry.fill_time,
                     stop_price=fill_risk.stop_price,
+                    initial_stop_price=fill_risk.stop_price,
                     fees=entry.fee,
                     reason=pending.candidate.idempotency_key,
                     entry_fee=entry.fee,
@@ -197,9 +208,17 @@ def step(
     risk = roll_day(risk, equity, candle.open_time)
 
     # 5. Candidate construction uses only the supplied history ending at this candle.
-    candidate = evaluate_candle(history, len(history) - 1, config.strategy)
-    if candidate is not None:
-        snapshot = build_snapshot(history, candidate, config.strategy)
+    if signal is None:
+        candidate = evaluate_candle(history, len(history) - 1, config.strategy)
+        signal = (
+            None
+            if candidate is None
+            else SharedSignal(
+                candidate=candidate, snapshot=build_snapshot(history, candidate, config.strategy)
+            )
+        )
+    if signal is not None and allow_entries:
+        candidate, snapshot = signal.candidate, signal.snapshot
         policy_decision = policy.decide(snapshot, candidate)
         risk_decision = None
         if policy_decision.action == "TAKE":
@@ -209,7 +228,7 @@ def step(
                 candidate.reference_price,
                 risk.model_copy(update={"open_position_count": occupied}),
                 candle.open_time,
-                False,
+                data_is_stale,
                 config,
             )
             risk = risk_decision.updated_state

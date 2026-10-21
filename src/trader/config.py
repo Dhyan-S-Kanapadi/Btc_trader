@@ -1,5 +1,7 @@
 """Environment-backed configuration for paper-trading research."""
 
+# ruff: noqa: E501
+
 from decimal import Decimal
 
 from pydantic import BaseModel, Field
@@ -39,6 +41,11 @@ class RiskSettings(BaseModel):
         Decimal("0.10"), gt=0, le=1, description="Assumed drawdown level that halts entries."
     )
     max_open_positions: int = Field(1, ge=1, description="Assumed maximum simultaneous positions.")
+    starting_equity: Decimal = Field(
+        Decimal("10000"),
+        gt=0,
+        description="Assumed paper-account starting equity in quote currency.",
+    )
 
 
 class CostSettings(BaseModel):
@@ -67,6 +74,23 @@ class DataSettings(BaseModel):
     backfill_days: int = Field(30, gt=0, description="Default number of days for CLI backfill.")
 
 
+class ReportSettings(BaseModel):
+    """Reporting assumptions; this threshold is not a validated statistical rule."""
+
+    report_min_trades: int = Field(
+        30, gt=0, description="Assumed minimum closed-trade sample size for a comparison warning."
+    )
+
+
+class WorkerSettings(BaseModel):
+    """Paper-worker scheduling and recovery settings."""
+
+    candle_close_buffer_seconds: int = Field(10, ge=0, description="Delay after candle close.")
+    poll_retry_seconds: int = Field(30, gt=0, description="Retry delay after a failed cycle.")
+    max_cycle_failures: int = Field(3, gt=0, description="Consecutive failures before exit.")
+    lock_key: int = Field(13_000_001, description="PostgreSQL advisory-lock key.")
+
+
 class Settings(BaseSettings):
     """All configuration sourced from environment variables or explicit test inputs."""
 
@@ -83,6 +107,12 @@ class Settings(BaseSettings):
     )
     data: DataSettings = Field(
         default_factory=DataSettings, description="Public market-data section."
+    )
+    report: ReportSettings = Field(
+        default_factory=ReportSettings, description="Report assumptions section."
+    )
+    worker: WorkerSettings = Field(
+        default_factory=WorkerSettings, description="Worker settings section."
     )
     database_url: str | None = Field(
         default=None,

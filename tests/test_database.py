@@ -5,7 +5,7 @@ from datetime import UTC, datetime
 from decimal import Decimal
 
 import pytest
-from sqlalchemy import inspect
+from sqlalchemy import func, inspect, select
 from sqlalchemy.exc import IntegrityError
 
 from trader.cli import main
@@ -17,10 +17,14 @@ from trader.models import Candidate, Candle
 from trader.replay import (
     TakeAllPolicy,
     generate_candles,
+    load_account_state,
     persist_replay,
+    persist_routed_candle,
     refuse_nonempty_account,
     run_replay,
+    run_routed_replay,
 )
+from trader.worker import WorkerLock
 
 EXPECTED_TABLES = {
     "accounts",
@@ -32,6 +36,7 @@ EXPECTED_TABLES = {
     "orders",
     "positions",
     "run_metadata",
+    "routed_candles",
     "snapshots",
     "trades",
 }
@@ -171,3 +176,100 @@ def test_persisted_synthetic_replay_refuses_account_reuse(storage: PostgresStora
     assert storage.account_has_replay_rows("A")
     with pytest.raises(ValueError, match="empty scratch-database account"):
         refuse_nonempty_account(storage, "A")
+
+
+def test_router_persists_each_account_once_and_restores_state(storage: PostgresStorage) -> None:
+    config = Settings().model_copy(
+        update={"strategy": Settings().strategy.model_copy(update={"symbol": "SYNTH-BTC"})}
+    )
+    accounts = {}
+    for account_id, policy_name in (
+        ("A", "take_all"),
+        ("B", "skip_all"),
+        ("C", "skip_all"),
+        ("D", "skip_all"),
+    ):
+        storage.seed_account(
+            account_id,
+            Decimal("10000"),
+            {
+                "account_id": account_id,
+                "label": f"Paper {account_id}",
+                "policy_name": policy_name,
+                "starting_equity": "10000",
+                "enabled": True,
+            },
+        )
+    from trader.replay import AccountConfig
+
+    for account_id in "ABCD":
+        account = AccountConfig.model_validate(storage.load_account_config(account_id))
+        accounts[account_id] = (load_account_state(storage, account), account)
+    candles = generate_candles(8, 180, datetime(2026, 1, 1, tzinfo=UTC), "1h")
+    results = run_routed_replay(
+        candles,
+        accounts,
+        config,
+        lambda candle, routed: persist_routed_candle(storage, "1h", candle, routed),
+    )
+    for account_id, result in results.items():
+        restored = load_account_state(storage, accounts[account_id][1])
+        assert restored == result.state
+        assert storage.account_has_replay_rows(account_id)
+    with storage._sessions() as session:
+        assert session.scalar(select(func.count()).select_from(DecisionRow)) == session.scalar(
+            select(func.count()).select_from(OrderRow)
+        )
+    rerun = run_routed_replay(
+        candles,
+        accounts,
+        config,
+        lambda candle, routed: persist_routed_candle(storage, "1h", candle, routed),
+    )
+    assert rerun["B"].state.position is None
+
+
+def test_postgres_advisory_lock_allows_only_one_worker(storage: PostgresStorage) -> None:
+    first = WorkerLock(storage, 13_000_013)
+    second = WorkerLock(storage, 13_000_013)
+    try:
+        assert first.acquire()
+        assert not second.acquire()
+        assert first.healthy()
+    finally:
+        first.close()
+        second.close()
+
+
+def test_seeded_multi_account_cli_persists_to_a_fresh_database(
+    storage: PostgresStorage, database_url: str, monkeypatch, tmp_path
+) -> None:
+    """The public CLI loads seeded JSON config and emits combined plus per-account output."""
+
+    monkeypatch.setenv("DATABASE_URL", database_url)
+    assert main(["seed-accounts"]) == 0
+    assert (
+        main(
+            [
+                "replay",
+                "--source",
+                "synthetic",
+                "--seed",
+                "9",
+                "--bars",
+                "180",
+                "--accounts",
+                "A,B,C,D",
+                "--persist",
+                "--output-dir",
+                str(tmp_path),
+            ]
+        )
+        == 0
+    )
+    assert (tmp_path / "combined_summary.json").is_file()
+    assert all(
+        (tmp_path / account_id / "SYNTHETIC_run_summary.json").is_file() for account_id in "ABCD"
+    )
+    assert storage.account_has_replay_rows("A")
+    assert storage.account_has_replay_rows("D")

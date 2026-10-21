@@ -1,12 +1,14 @@
 """Small SQLAlchemy storage boundary for paper-trading state."""
 
+# ruff: noqa: E501
+
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Protocol
 from uuid import UUID
 
-from sqlalchemy import create_engine, select
+from sqlalchemy import create_engine, func, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import sessionmaker
 
@@ -16,10 +18,12 @@ from .models import (
     AccountRow,
     CandidateRow,
     CandleRow,
+    ConfigRow,
     DecisionRow,
     EquityPointRow,
     OrderRow,
     PositionRow,
+    RoutedCandleRow,
     RunMetadataRow,
     SnapshotRow,
     TradeRow,
@@ -76,7 +80,19 @@ class PaperStorage(Protocol):
 
     def account_has_replay_rows(self, account_id: str) -> bool: ...
 
+    def candle_routed_for_accounts(
+        self, symbol: str, interval: str, open_time: datetime, account_ids: list[str]
+    ) -> bool: ...
+
     def candle_id(self, symbol: str, interval: str, open_time: datetime) -> UUID: ...
+
+    def candidate_id(self, idempotency_key: str) -> UUID | None: ...
+
+    def decision_exists(self, account_id: str, candidate_key: str) -> bool: ...
+
+    def equity_exists(self, account_id: str, recorded_at: datetime) -> bool: ...
+
+    def trade_exists(self, account_id: str, reason: str, exit_time: datetime) -> bool: ...
 
     def save_candidate(self, candidate: Candidate, candle_id: UUID) -> UUID: ...
 
@@ -224,6 +240,180 @@ class PostgresStorage:
                 for model in (DecisionRow, OrderRow, PositionRow, TradeRow, EquityPointRow)
             )
 
+    def candle_routed_for_accounts(
+        self, symbol: str, interval: str, open_time: datetime, account_ids: list[str]
+    ) -> bool:
+        """Return whether every enabled account durably completed this candle."""
+
+        if not account_ids:
+            return True
+        with self._sessions() as session:
+            candle_id = session.scalar(
+                select(CandleRow.id).where(
+                    CandleRow.symbol == symbol,
+                    CandleRow.interval == interval,
+                    CandleRow.open_time == open_time,
+                )
+            )
+            if candle_id is None:
+                return False
+            count = session.scalar(
+                select(func.count())
+                .select_from(RoutedCandleRow)
+                .where(
+                    RoutedCandleRow.candle_id == candle_id,
+                    RoutedCandleRow.account_id.in_(account_ids),
+                )
+            )
+            return count == len(account_ids)
+
+    def verify_worker_schema(self) -> None:
+        """Fail startup before routing when the worker migration has not been applied."""
+
+        with self._sessions() as session:
+            session.execute(select(RoutedCandleRow.id).limit(1))
+
+    def persist_routed_candle(
+        self, interval: str, candle: Candle, results: object, reason: str | None = None
+    ) -> None:
+        """Atomically persist a routed candle, states, evidence, and its durable checkpoints."""
+
+        routed = results  # Kept structural to avoid coupling storage to the pure replay package.
+        with self._sessions.begin() as session:
+            values = {
+                "symbol": candle.symbol,
+                "interval": interval,
+                "open_time": candle.open_time,
+                "open": candle.open,
+                "high": candle.high,
+                "low": candle.low,
+                "close": candle.close,
+                "volume": candle.volume,
+            }
+            statement = (
+                insert(CandleRow)
+                .values(values)
+                .on_conflict_do_update(
+                    constraint="candles_symbol_interval_open_time_key",
+                    set_={
+                        name: getattr(insert(CandleRow).excluded, name)
+                        for name in values
+                        if name not in {"symbol", "interval", "open_time"}
+                    },
+                )
+            )
+            session.execute(statement)
+            candle_id = session.scalar(
+                select(CandleRow.id).where(
+                    CandleRow.symbol == candle.symbol,
+                    CandleRow.interval == interval,
+                    CandleRow.open_time == candle.open_time,
+                )
+            )
+            assert candle_id is not None
+            for account_id, result in routed.items():
+                for decision in result.decisions:
+                    candidate_id = session.scalar(
+                        select(CandidateRow.id).where(
+                            CandidateRow.idempotency_key == decision.candidate.idempotency_key
+                        )
+                    )
+                    if candidate_id is None:
+                        candidate = CandidateRow(
+                            candle_id=candle_id, **decision.candidate.model_dump()
+                        )
+                        session.add(candidate)
+                        session.flush()
+                        candidate_id = candidate.id
+                        session.add(
+                            SnapshotRow(
+                                candidate_id=candidate_id,
+                                schema_version=decision.snapshot.schema_version,
+                                snapshot=decision.snapshot.model_dump(mode="json"),
+                            )
+                        )
+                    exists = session.scalar(
+                        select(DecisionRow.id).where(
+                            DecisionRow.account_id == account_id,
+                            DecisionRow.candidate_idempotency_key
+                            == decision.candidate.idempotency_key,
+                        )
+                    )
+                    if exists is None:
+                        session.add(
+                            DecisionRow(
+                                account_id=account_id,
+                                candidate_id=candidate_id,
+                                candidate_idempotency_key=decision.candidate.idempotency_key,
+                                action=decision.action,
+                                reason=reason or decision.reason,
+                                verdict={"risk_code": decision.risk_code}
+                                if decision.risk_code is not None
+                                else None,
+                            )
+                        )
+                        session.add(
+                            OrderRow(
+                                account_id=account_id,
+                                candidate_id=candidate_id,
+                                candidate_idempotency_key=decision.candidate.idempotency_key,
+                                side="BUY",
+                                qty=Decimal("0"),
+                                status="ROUTED",
+                                reference_price=decision.candidate.reference_price,
+                            )
+                        )
+                point = result.equity_point
+                if (
+                    session.scalar(
+                        select(EquityPointRow.id).where(
+                            EquityPointRow.account_id == account_id,
+                            EquityPointRow.recorded_at == point.recorded_at,
+                        )
+                    )
+                    is None
+                ):
+                    session.add(
+                        EquityPointRow(
+                            account_id=account_id,
+                            recorded_at=point.recorded_at,
+                            equity=point.equity,
+                        )
+                    )
+                for trade in result.trades:
+                    if (
+                        session.scalar(
+                            select(TradeRow.id).where(
+                                TradeRow.account_id == account_id,
+                                TradeRow.reason == trade.reason,
+                                TradeRow.exit_time == trade.exit_time,
+                            )
+                        )
+                        is None
+                    ):
+                        session.add(TradeRow(**trade.model_dump()))
+                state = result.state
+                row = session.get(AccountRow, account_id)
+                if row is None:
+                    raise LookupError(f"account does not exist: {account_id}")
+                row.cash = state.cash
+                row.equity = state.risk.equity
+                row.peak_equity = state.risk.peak_equity
+                row.halted = state.risk.halted
+                row.engine_state = state.model_dump(mode="json")
+                if (
+                    session.scalar(
+                        select(RoutedCandleRow.id).where(
+                            RoutedCandleRow.account_id == account_id,
+                            RoutedCandleRow.candle_id == candle_id,
+                        )
+                    )
+                    is None
+                ):
+                    session.add(
+                        RoutedCandleRow(account_id=account_id, candle_id=candle_id, reason=reason)
+                    )
+
     def candle_id(self, symbol: str, interval: str, open_time: datetime) -> UUID:
         """Return the durable natural-key candle identifier after an idempotent upsert."""
 
@@ -238,6 +428,63 @@ class PostgresStorage:
         if value is None:
             raise LookupError("candle was not persisted")
         return value
+
+    def candidate_id(self, idempotency_key: str) -> UUID | None:
+        """Return a shared candidate by its stable key."""
+
+        with self._sessions() as session:
+            return session.scalar(
+                select(CandidateRow.id).where(CandidateRow.idempotency_key == idempotency_key)
+            )
+
+    def decision_exists(self, account_id: str, candidate_key: str) -> bool:
+        """Check per-account candidate idempotency before writing a route result."""
+
+        with self._sessions() as session:
+            return (
+                session.scalar(
+                    select(DecisionRow.id)
+                    .where(
+                        DecisionRow.account_id == account_id,
+                        DecisionRow.candidate_idempotency_key == candidate_key,
+                    )
+                    .limit(1)
+                )
+                is not None
+            )
+
+    def equity_exists(self, account_id: str, recorded_at: datetime) -> bool:
+        """Check the unique equity point key before a re-routed candle writes it again."""
+
+        with self._sessions() as session:
+            return (
+                session.scalar(
+                    select(EquityPointRow.id)
+                    .where(
+                        EquityPointRow.account_id == account_id,
+                        EquityPointRow.recorded_at == recorded_at,
+                    )
+                    .limit(1)
+                )
+                is not None
+            )
+
+    def trade_exists(self, account_id: str, reason: str, exit_time: datetime) -> bool:
+        """Check a completed trade's stable entry key and exit time before recording it again."""
+
+        with self._sessions() as session:
+            return (
+                session.scalar(
+                    select(TradeRow.id)
+                    .where(
+                        TradeRow.account_id == account_id,
+                        TradeRow.reason == reason,
+                        TradeRow.exit_time == exit_time,
+                    )
+                    .limit(1)
+                )
+                is not None
+            )
 
     def save_run_metadata(self, kind: str, metadata: dict[str, object]) -> UUID:
         """Persist deterministic replay metadata without credentials."""
@@ -294,9 +541,127 @@ class PostgresStorage:
                     halted,
                 )
 
+    def save_engine_state(self, account_id: str, state: dict[str, object]) -> None:
+        """Persist the complete serializable replay state for restart recovery."""
+
+        with self._sessions.begin() as session:
+            row = session.get(AccountRow, account_id)
+            if row is None:
+                raise LookupError(f"account does not exist: {account_id}")
+            row.engine_state = state
+
+    def load_engine_state(self, account_id: str) -> dict[str, object] | None:
+        """Load serialized replay state without retaining it in process memory."""
+
+        with self._sessions() as session:
+            row = session.get(AccountRow, account_id)
+            return None if row is None else row.engine_state
+
+    def seed_account(self, account_id: str, cash: Decimal, config: dict[str, object]) -> None:
+        """Create a paper account/config only when absent; never overwrite operator changes."""
+
+        with self._sessions.begin() as session:
+            if session.get(AccountRow, account_id) is None:
+                session.add(
+                    AccountRow(
+                        account_id=account_id,
+                        cash=cash,
+                        equity=cash,
+                        peak_equity=cash,
+                        halted=False,
+                    )
+                )
+            if (
+                session.scalar(select(ConfigRow.id).where(ConfigRow.account_id == account_id))
+                is None
+            ):
+                session.add(ConfigRow(account_id=account_id, config=config))
+
+    def load_account_config(self, account_id: str) -> dict[str, object]:
+        """Load non-secret account config or fail before routing begins."""
+
+        with self._sessions() as session:
+            config = session.scalar(
+                select(ConfigRow.config).where(ConfigRow.account_id == account_id)
+            )
+        if config is None:
+            raise LookupError(f"account config does not exist: {account_id}")
+        return config
+
     def load_account_state(self, account_id: str) -> AccountRow | None:
         with self._sessions() as session:
             return session.get(AccountRow, account_id)
+
+    def report_account_ids(self) -> list[str]:
+        """List configured paper accounts deterministically for the read-only report job."""
+
+        with self._sessions() as session:
+            return list(
+                session.scalars(select(AccountRow.account_id).order_by(AccountRow.account_id))
+            )
+
+    def load_report_rows(
+        self, account_id: str, start: datetime | None, end: datetime | None
+    ) -> tuple[
+        list[TradeRow],
+        list[EquityPointRow],
+        list[str],
+        tuple[datetime | None, datetime | None],
+        int,
+        int,
+        dict[str, object] | None,
+        dict[str, object] | None,
+    ]:
+        """Load only report inputs; this method deliberately issues SELECT statements only."""
+
+        trade_query = select(TradeRow).where(TradeRow.account_id == account_id)
+        equity_query = select(EquityPointRow).where(EquityPointRow.account_id == account_id)
+        candidate_query = (
+            select(CandidateRow.idempotency_key, CandidateRow.signal_time)
+            .join(DecisionRow, DecisionRow.candidate_id == CandidateRow.id)
+            .where(DecisionRow.account_id == account_id)
+        )
+        if start is not None:
+            trade_query = trade_query.where(TradeRow.exit_time >= start)
+            equity_query = equity_query.where(EquityPointRow.recorded_at >= start)
+            candidate_query = candidate_query.where(CandidateRow.signal_time >= start)
+        if end is not None:
+            trade_query = trade_query.where(TradeRow.exit_time <= end)
+            equity_query = equity_query.where(EquityPointRow.recorded_at <= end)
+            candidate_query = candidate_query.where(CandidateRow.signal_time <= end)
+        with self._sessions() as session:
+            trades = session.scalars(trade_query.order_by(TradeRow.exit_time, TradeRow.id)).all()
+            equity = session.scalars(equity_query.order_by(EquityPointRow.recorded_at)).all()
+            candidates = session.execute(candidate_query.order_by(CandidateRow.signal_time)).all()
+            rejected = session.scalar(
+                select(func.count())
+                .select_from(DecisionRow)
+                .where(DecisionRow.account_id == account_id, DecisionRow.action != "TAKE")
+            )
+            open_positions = session.scalar(
+                select(func.count())
+                .select_from(PositionRow)
+                .where(PositionRow.account_id == account_id, PositionRow.exit_time.is_(None))
+            )
+            config = session.scalar(
+                select(ConfigRow.config).where(ConfigRow.account_id == account_id)
+            )
+            metadata = session.scalar(
+                select(RunMetadataRow.metadata_json)
+                .order_by(RunMetadataRow.started_at.desc(), RunMetadataRow.id.desc())
+                .limit(1)
+            )
+        times = [row.signal_time for row in candidates]
+        return (
+            trades,
+            equity,
+            [row.idempotency_key for row in candidates],
+            (min(times) if times else None, max(times) if times else None),
+            int(rejected or 0),
+            int(open_positions or 0),
+            config,
+            metadata,
+        )
 
     def save_decision_and_order(
         self, decision: DecisionWrite, order: OrderWrite

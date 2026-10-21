@@ -34,7 +34,7 @@ application does not require or load a dotenv file.
 | Section | Assumption defaults |
 | --- | --- |
 | Strategy | `BTCUSDT`, `1h`, 24-bar breakout lookback, 14-bar ATR, 96-bar trend SMA, 1.5 initial-stop ATR, 2.0 trailing-stop ATR, 48-bar time stop |
-| Risk | 1% risk per trade, 3% daily loss cap, 10% drawdown halt, one open position |
+| Risk | 1% risk per trade, 3% daily loss cap, 10% drawdown halt, one open position, 10,000 starting paper equity |
 | Costs | 10 bps fee per side and 5 bps slippage |
 
 Prices and quantities use `Decimal`, rather than `float`, so later accounting and fee
@@ -185,6 +185,81 @@ trader replay --source synthetic --seed 1 --bars 3000 --persist --output-dir rep
 Pending entries at the final bar are retained in the final state but never reported as trades.
 shortcut: Replay persistence stores final account state in the existing account row; add full
 pending-position restart serialization when live-worker recovery is introduced.
+
+## Paper-account variants
+
+Issue #11 adds four independent paper accounts, `A` through `D`, sharing each closed candle,
+candidate, and evidence snapshot while keeping cash, positions, risk limits, and decisions separate.
+`trader seed-accounts` creates the idempotent local defaults: `A` uses `take_all`; `B`, `C`, and
+`D` use `skip_all` with the exact reason `agent not wired yet (#27)`. Each account has an editable,
+non-secret `configs` JSON document containing `account_id`, `label`, `policy_name`,
+`starting_equity`, and `enabled`; an unknown policy or malformed configuration fails before replay.
+
+For multi-account replay, seed the database first. `--accounts` defaults to `A`; comma-separated
+accounts write per-account files below the output directory plus `combined_summary.json`. `--persist`
+requires every selected account to be empty, then writes shared evidence once and per-account
+decisions/orders atomically. The complete serialized engine state is stored in `accounts.engine_state`,
+so a new process resumes the same cash, UTC-day risk state, halt status, pending entry, and position.
+
+```powershell
+$env:DATABASE_URL = "postgresql+psycopg://paper:paper@localhost:5432/paper_trader"
+trader migrate
+trader seed-accounts
+trader replay --source synthetic --seed 1 --bars 3000 --accounts A,B,C,D --persist --output-dir replay-output
+```
+
+`A` without `--persist` remains runnable without a database for deterministic synthetic experiments;
+that compatibility path uses the explicit `--policy` baseline and does not load or mutate account
+configuration. All account policy names and balances are proposals to test, never validated strategy
+choices.
+
+shortcut: Completed trades are idempotently recognized by account, entry-candidate reason, and exit time; add a database unique constraint when the trade schema gains a durable execution identifier.
+
+## Live paper worker
+
+`trader worker` is the only continuous worker entrypoint. It is **PAPER TRADING ONLY**: it uses the
+public Binance candle endpoint, PostgreSQL, and the existing paper replay/router/risk path; it has no
+exchange keys, signed requests, account endpoints, or order-placement endpoints. Run migrations and
+seed accounts first:
+
+```powershell
+trader migrate
+trader seed-accounts
+trader worker
+```
+
+The worker waits for each configured candle close plus `TRADER_WORKER__CANDLE_CLOSE_BUFFER_SECONDS`
+(default `10`), backfills only closed candles, then routes every not-yet-routed candle chronologically.
+`TRADER_WORKER__POLL_RETRY_SECONDS`, `TRADER_WORKER__MAX_CYCLE_FAILURES`, and
+`TRADER_WORKER__LOCK_KEY` control failure retries, the consecutive-failure exit threshold, and the
+PostgreSQL session advisory-lock key. PostgreSQL and Amazon RDS for PostgreSQL support advisory locks.
+
+Each account/candle completion is an atomic transaction containing candle evidence, decisions/orders,
+trades, equity, serialized engine state, and a `routed_candles` checkpoint. The checkpoint is the
+already-routed marker; a restart reloads durable engine state and cannot skip a partially persisted
+candle or duplicate its effects. The lock remains on one dedicated PostgreSQL connection; a probe on
+that same connection detects loss and exits non-zero.
+
+Freshness is calculated once per cycle and passed to the risk path, so stale data prevents new entries
+while exit, trailing-stop, time-stop, and equity processing continue. During catch-up, candles more
+than one interval behind the newest closed candle also process exits and marks but cannot create a
+pending entry; their per-account durable checkpoint has reason `stale_catchup`. The newest eligible
+candle may create a pending entry. This explicitly resolves the catch-up ambiguity.
+
+## Variant report
+
+`trader report` is a read-only, one-off PostgreSQL job for comparing the selected paper accounts
+from one replay scratch database. It writes deterministic CSV, JSON, and Markdown files. Closed-trade
+metrics use after-fee net P&L: return is final/first equity minus one; drawdown is the largest
+peak-to-trough equity fraction; win rate is profitable closed trades/trades; profit factor is gross
+profit/gross loss; and Average R is net P&L divided by quantity times entry price minus the immutable
+initial stop. Open positions are excluded from trade metrics but their unrealized P&L remains in
+equity metrics. Profit factor is null when there are no losses.
+
+The report warns when accounts do not share candidate keys/candle ranges or have fewer than the
+assumed `TRADER_REPORT__REPORT_MIN_TRADES=30` closed trades. This is an assumption, not a validated
+threshold. It reports missing stored cost/strategy metadata as missing rather than using current
+settings. Results are a sample, never a forecast; synthetic reports are explicitly labeled.
 
 ## Make targets
 

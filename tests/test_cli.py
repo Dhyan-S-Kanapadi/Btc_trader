@@ -15,7 +15,7 @@ def test_help_works(capsys) -> None:
     assert "worker" in capsys.readouterr().out
 
 
-@pytest.mark.parametrize("command", ["worker", "api", "report"])
+@pytest.mark.parametrize("command", ["api"])
 def test_subcommands_log_json_and_exit_nonzero(command: str, capfd) -> None:
     assert main([command]) != 0
     _, stderr = capfd.readouterr()

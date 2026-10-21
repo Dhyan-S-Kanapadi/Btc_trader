@@ -57,6 +57,7 @@ def trade_from_exit(position: Position, fill: Fill, reason: str) -> Trade:
         entry_price=position.entry_price,
         entry_time=position.entry_time,
         stop_price=position.stop_price,
+        initial_stop_price=position.initial_stop_price,
         exit_price=fill.price,
         exit_time=fill.fill_time,
         fees=position.entry_fee + fill.fee,

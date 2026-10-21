@@ -80,6 +80,7 @@ class AccountRow(Base):
     equity: Mapped[Decimal] = mapped_column(MONEY)
     peak_equity: Mapped[Decimal] = mapped_column(MONEY)
     halted: Mapped[bool] = mapped_column(default=False)
+    engine_state: Mapped[dict[str, object] | None] = mapped_column(JSON, nullable=True)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
@@ -136,6 +137,7 @@ class PositionRow(Base):
     entry_price: Mapped[Decimal] = mapped_column(MONEY)
     entry_time: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     stop_price: Mapped[Decimal] = mapped_column(MONEY)
+    initial_stop_price: Mapped[Decimal | None] = mapped_column(MONEY, nullable=True)
     exit_price: Mapped[Decimal | None] = mapped_column(MONEY, nullable=True)
     exit_time: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     fees: Mapped[Decimal] = mapped_column(MONEY, default=Decimal("0"))
@@ -154,6 +156,7 @@ class TradeRow(Base):
     entry_price: Mapped[Decimal] = mapped_column(MONEY)
     entry_time: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     stop_price: Mapped[Decimal] = mapped_column(MONEY)
+    initial_stop_price: Mapped[Decimal | None] = mapped_column(MONEY, nullable=True)
     exit_price: Mapped[Decimal] = mapped_column(MONEY)
     exit_time: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     fees: Mapped[Decimal] = mapped_column(MONEY, default=Decimal("0"))
@@ -170,6 +173,18 @@ class EquityPointRow(Base):
     account_id: Mapped[str] = mapped_column(ForeignKey("accounts.account_id"))
     recorded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     equity: Mapped[Decimal] = mapped_column(MONEY)
+
+
+class RoutedCandleRow(Base):
+    """Durable worker checkpoint: one fully persisted account/candle transition."""
+
+    __tablename__ = "routed_candles"
+    __table_args__ = (UniqueConstraint("account_id", "candle_id"),)
+
+    id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
+    account_id: Mapped[str] = mapped_column(ForeignKey("accounts.account_id"))
+    candle_id: Mapped[UUID] = mapped_column(ForeignKey("candles.id"))
+    reason: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
 class ConfigRow(Base):
