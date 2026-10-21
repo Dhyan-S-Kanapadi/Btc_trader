@@ -1,5 +1,6 @@
 """Single-process, paper-only worker scheduling around existing ingestion and routing."""
 
+import inspect
 import logging
 import signal
 import threading
@@ -10,6 +11,7 @@ from typing import Protocol
 from sqlalchemy import text
 
 from trader.config import Settings
+from trader.control import ControlConfig, resolve_agent_gate
 from trader.data.binance import BinanceIngestor, interval_delta, latest_freshness
 from trader.db.storage import PostgresStorage
 from trader.logging import configure_logging
@@ -72,15 +74,23 @@ class CycleResult:
     stale: bool
     equity: dict[str, str]
     open_positions: dict[str, bool]
+    agent_gates: dict[str, str]
 
 
 def run_cycle(storage: PostgresStorage, accounts, settings: Settings, now: datetime) -> CycleResult:
     """Fetch closed public candles, then route unpersisted candles in chronological order."""
 
+    try:
+        control = storage.load_agent_control()
+    except Exception:
+        logging.getLogger("trader.worker").exception(
+            "control plane unreadable", extra={"alarm": "control_plane_unreadable"}
+        )
+        control = ControlConfig(readable=False)
     freshness = latest_freshness(storage, settings.strategy.symbol, settings.strategy.interval, now)
     candles = storage.load_candles(settings.strategy.symbol, settings.strategy.interval)
     if not candles:
-        return CycleResult(None, 0, freshness.stale, {}, {})
+        return CycleResult(None, 0, freshness.stale, {}, {}, {})
     history_size = max(settings.strategy.atr_period, settings.strategy.breakout_lookback) + 1
     routed = 0
     enabled_ids = list(accounts)
@@ -92,14 +102,11 @@ def run_cycle(storage: PostgresStorage, accounts, settings: Settings, now: datet
         ):
             continue
         catchup = latest_open - candle.open_time > interval_delta(settings.strategy.interval)
-        results = route_candle(
-            accounts,
-            history,
-            candle,
-            settings,
-            freshness.stale,
-            allow_entries=not catchup,
-        )
+        kwargs = {"allow_entries": not catchup}
+        # Small compatibility seam for test doubles; production router always receives the snapshot.
+        if "control" in inspect.signature(route_candle).parameters:
+            kwargs["control"] = control
+        results = route_candle(accounts, history, candle, settings, freshness.stale, **kwargs)
         storage.persist_routed_candle(
             settings.strategy.interval, candle, results, "stale_catchup" if catchup else None
         )
@@ -119,6 +126,10 @@ def run_cycle(storage: PostgresStorage, accounts, settings: Settings, now: datet
         freshness.stale,
         {account_id: str(state.risk.equity) for account_id, (state, _) in accounts.items()},
         {account_id: state.position is not None for account_id, (state, _) in accounts.items()},
+        {
+            account_id: ("A" if account_id == "A" else resolve_agent_gate(control, account_id).mode)
+            for account_id in accounts
+        },
     )
 
 
@@ -200,6 +211,7 @@ def run_worker(settings: Settings, clock: Clock | None = None) -> int:
                         "stale": cycle.stale,
                         "equity": cycle.equity,
                         "open_positions": cycle.open_positions,
+                        "agent_gates": cycle.agent_gates,
                         "cycle_latency_seconds": (clock.now() - started).total_seconds(),
                     },
                 )

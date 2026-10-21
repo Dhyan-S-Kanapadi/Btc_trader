@@ -8,6 +8,7 @@ from decimal import Decimal
 from pydantic import Field
 
 from trader.config import Settings
+from trader.control import ControlConfig, GatedPolicy, resolve_agent_gate
 from trader.db.storage import PostgresStorage
 from trader.models import Candle, FrozenModel
 from trader.risk import AccountState
@@ -65,6 +66,8 @@ def route_candle(
     settings: Settings,
     data_is_stale: bool = False,
     allow_entries: bool = True,
+    control: ControlConfig | None = None,
+    policies: Mapping[str, DecisionPolicy] | None = None,
 ) -> dict[str, StepResult]:
     """Route one closed candle independently, sharing exactly one candidate and snapshot."""
 
@@ -82,11 +85,21 @@ def route_candle(
         if not account.enabled:
             continue
         try:
+            policy = (
+                policies.get(account_id)
+                if policies is not None
+                else policy_for(account.policy_name, settings)
+            )
+            if policy is None:
+                raise ValueError(f"missing policy for account: {account_id}")
+            if account_id != "A" and control is not None:
+                gate = resolve_agent_gate(control, account_id)
+                policy = GatedPolicy(gate, policy, SkipAllPolicy())
             results[account_id] = step(
                 state,
                 history,
                 candle,
-                policy_for(account.policy_name, settings),
+                policy,
                 settings,
                 signal,
                 data_is_stale,
@@ -102,6 +115,7 @@ def run_routed_replay(
     accounts: Mapping[str, tuple[ReplayState, AccountConfig]],
     settings: Settings,
     on_candle: Callable[[Candle, Mapping[str, StepResult]], None] | None = None,
+    control: ControlConfig | None = None,
 ) -> dict[str, ReplayResult]:
     """Replay one shared candle stream through independent account states and policies."""
 
@@ -118,7 +132,11 @@ def run_routed_replay(
     )
     for index, candle in enumerate(candles):
         results = route_candle(
-            states, candles[max(0, index - bounded + 1) : index + 1], candle, settings
+            states,
+            candles[max(0, index - bounded + 1) : index + 1],
+            candle,
+            settings,
+            control=control,
         )
         if on_candle is not None:
             on_candle(candle, results)

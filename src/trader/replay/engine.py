@@ -21,6 +21,10 @@ class PolicyDecision(FrozenModel):
 
     action: Literal["TAKE", "SKIP", "WAIT"]
     reason: str = Field(min_length=1)
+    verdict: dict[str, object] | None = None
+    shadow: bool = False
+    model_version: str | None = None
+    prompt_version: str | None = None
 
 
 class DecisionPolicy(Protocol):
@@ -82,6 +86,10 @@ class RecordedDecision(FrozenModel):
     action: Literal["TAKE", "SKIP", "WAIT"]
     reason: str
     risk_code: str | None = None
+    verdict: dict[str, object] | None = None
+    shadow: bool = False
+    model_version: str | None = None
+    prompt_version: str | None = None
 
 
 class EquityPoint(FrozenModel):
@@ -241,6 +249,10 @@ def step(
                 action=policy_decision.action,
                 reason=policy_decision.reason,
                 risk_code=None if risk_decision is None else risk_decision.reason.code,
+                verdict=policy_decision.verdict,
+                shadow=policy_decision.shadow,
+                model_version=policy_decision.model_version,
+                prompt_version=policy_decision.prompt_version,
             )
         )
 

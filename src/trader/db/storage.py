@@ -16,6 +16,9 @@ from trader.models import Candidate, Candle, Snapshot
 
 from .models import (
     AccountRow,
+    AgentAccountControlRow,
+    AgentControlAuditRow,
+    AgentGlobalControlRow,
     CandidateRow,
     CandleRow,
     ConfigRow,
@@ -273,6 +276,104 @@ class PostgresStorage:
         with self._sessions() as session:
             session.execute(select(RoutedCandleRow.id).limit(1))
 
+    def seed_agent_controls(self) -> None:
+        """Idempotently create conservative controls; never overwrite operator choices."""
+
+        from trader.control import DEFAULT_PER_CANDIDATE_CAP, DEFAULT_PER_DAY_CAP
+
+        with self._sessions.begin() as session:
+            if session.get(AgentGlobalControlRow, 1) is None:
+                session.add(
+                    AgentGlobalControlRow(
+                        id=1,
+                        agent_enabled=False,
+                        kill_switch=False,
+                        per_candidate_cap=DEFAULT_PER_CANDIDATE_CAP,
+                        per_day_cap=DEFAULT_PER_DAY_CAP,
+                    )
+                )
+            for account_id in ("B", "C", "D"):
+                if session.get(AgentAccountControlRow, account_id) is None:
+                    session.add(AgentAccountControlRow(account_id=account_id))
+
+    def load_agent_control(self):
+        """Read one immutable control snapshot; callers treat any exception as unreadable."""
+
+        from trader.control import AccountControl, ControlConfig, GlobalControl
+
+        with self._sessions() as session:
+            global_row = session.get(AgentGlobalControlRow, 1)
+            if global_row is None:
+                return ControlConfig()
+            accounts = {
+                row.account_id: AccountControl(
+                    account_id=row.account_id,
+                    agent_enabled=row.agent_enabled,
+                    shadow=row.shadow,
+                    kill_switch=row.kill_switch,
+                    per_candidate_cap=row.per_candidate_cap,
+                    per_day_cap=row.per_day_cap,
+                    fallback_policy=row.fallback_policy,
+                )
+                for row in session.scalars(select(AgentAccountControlRow))
+            }
+            return ControlConfig(
+                global_control=GlobalControl(
+                    agent_enabled=global_row.agent_enabled,
+                    kill_switch=global_row.kill_switch,
+                    model_version=global_row.model_version,
+                    prompt_version=global_row.prompt_version,
+                    per_candidate_cap=global_row.per_candidate_cap,
+                    per_day_cap=global_row.per_day_cap,
+                ),
+                accounts=accounts,
+            )
+
+    def set_agent_control(self, scope: str, field: str, value: object, actor: str) -> None:
+        """Atomically update one allowlisted operator field and append its audit event."""
+
+        global_fields = {
+            "agent_enabled",
+            "kill_switch",
+            "model_version",
+            "prompt_version",
+            "per_candidate_cap",
+            "per_day_cap",
+        }
+        account_fields = {
+            "agent_enabled",
+            "shadow",
+            "kill_switch",
+            "per_candidate_cap",
+            "per_day_cap",
+            "fallback_policy",
+        }
+        is_global = scope == "global"
+        if field not in (global_fields if is_global else account_fields):
+            raise ValueError("field is not allowed")
+        with self._sessions.begin() as session:
+            if is_global:
+                row = session.get(AgentGlobalControlRow, 1)
+                if row is None:
+                    raise LookupError("global controls are not seeded")
+            else:
+                row = session.get(AgentAccountControlRow, scope)
+                if row is None:
+                    row = AgentAccountControlRow(account_id=scope)
+                    session.add(row)
+                    session.flush()
+            old_value = getattr(row, field)
+            setattr(row, field, value)
+            session.add(
+                AgentControlAuditRow(
+                    actor=actor,
+                    scope=scope,
+                    field=field,
+                    old_value=str(old_value) if isinstance(old_value, Decimal) else old_value,
+                    new_value=value,
+                )
+            )
+
     def persist_routed_candle(
         self, interval: str, candle: Candle, results: object, reason: str | None = None
     ) -> None:
@@ -349,7 +450,10 @@ class PostgresStorage:
                                 reason=reason or decision.reason,
                                 verdict={"risk_code": decision.risk_code}
                                 if decision.risk_code is not None
-                                else None,
+                                else decision.verdict,
+                                shadow=decision.shadow,
+                                model_version=decision.model_version,
+                                prompt_version=decision.prompt_version,
                             )
                         )
                         session.add(

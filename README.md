@@ -306,3 +306,28 @@ settings. Results are a sample, never a forecast; synthetic reports are explicit
 | `make lint` | Run Ruff lint and formatting checks. |
 | `make up` | Build and start the local Compose stack in the background. |
 | `make down` | Stop the local Compose stack. |
+
+## Agent operations control plane
+
+Issue #17 adds operator controls for agent-gated entry decisions only. They cannot change risk,
+position size, stops, exits, broker behavior, or account A. Missing controls fail closed: agents are
+off, shadows default on, kill switches are off, model/prompt versions are null, and cap assumptions
+are `0.10` per candidate and `1.00` per day. Caps are stored and exposed only; spend tracking is not
+implemented.
+
+The worker reads one immutable control snapshot per cycle. An unreadable control plane emits
+`control_plane_unreadable` and kills only agent-gated entries for that cycle; account A and exits
+continue. Shadow records the inner verdict with `shadow=true`, while the fixed `skip_all` fallback
+determines the actual result. Agent errors become `SKIP agent_error`.
+
+```powershell
+trader control seed
+trader control show
+trader control set global agent_enabled true --actor operator-name
+trader control set B shadow false --actor operator-name
+trader control kill B --actor operator-name
+```
+
+The CLI has strict typed, allowlisted updates. Each change and its self-reported actor are written
+atomically to an append-only PostgreSQL audit table; a PostgreSQL 16 trigger rejects audit updates
+and deletes. Offline replay accepts `--control path/to/control.json` and never reads DB controls.
