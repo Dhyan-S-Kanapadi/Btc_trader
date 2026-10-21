@@ -3,8 +3,11 @@
 # ruff: noqa: E501
 
 import argparse
+import getpass
+import json
 from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
 from trader.logging import configure_logging
@@ -36,6 +39,9 @@ def build_parser() -> argparse.ArgumentParser:
     replay.add_argument("--policy", choices=("take_all", "volume_filter"), default="take_all")
     replay.add_argument("--output-dir", type=Path, default=Path("replay-output"))
     replay.add_argument("--persist", action="store_true")
+    replay.add_argument(
+        "--control", type=Path, help="Offline JSON control snapshot; never read from DB."
+    )
     report = subcommands.add_parser("report", help="Write a read-only account comparison report.")
     report.add_argument(
         "--accounts", help="Comma-separated accounts; defaults to all configured accounts."
@@ -45,6 +51,29 @@ def build_parser() -> argparse.ArgumentParser:
     report.add_argument("--output-dir", type=Path, default=Path("report-output"))
     subcommands.add_parser("worker", help=f"Reserved for issue #{_COMMAND_ISSUES['worker']}.")
     subcommands.add_parser("api", help="Run the read-only paper-trading HTTP API.")
+    control = subcommands.add_parser(
+        "control", help="Inspect or change fail-closed agent controls."
+    )
+    control_subcommands = control.add_subparsers(dest="control_command", required=True)
+    control_subcommands.add_parser("show", help="Show the current control snapshot.")
+    control_subcommands.add_parser(
+        "seed", help="Create conservative defaults without overwriting changes."
+    )
+    set_control = control_subcommands.add_parser(
+        "set", help="Atomically change one allowlisted control."
+    )
+    set_control.add_argument("scope", help="global or an account ID")
+    set_control.add_argument("field")
+    set_control.add_argument("value")
+    set_control.add_argument(
+        "--actor", default=getpass.getuser(), help="Self-reported operator identity."
+    )
+    for name, value in (("kill", "true"), ("unkill", "false")):
+        command = control_subcommands.add_parser(name, help=f"Set a kill switch {value}.")
+        command.add_argument("scope", help="global or an account ID")
+        command.add_argument(
+            "--actor", default=getpass.getuser(), help="Self-reported operator identity."
+        )
     return parser
 
 
@@ -126,8 +155,55 @@ def main(argv: Sequence[str] | None = None) -> int:
         configure_logging().info("paper accounts seeded", extra={"command": "seed-accounts"})
         return 0
 
+    if args.command == "control":
+        from trader.config import Settings
+        from trader.db.storage import PostgresStorage
+
+        settings = Settings()
+        if settings.database_url is None:
+            parser.error("DATABASE_URL is required for trader control")
+        storage = PostgresStorage(settings.database_url)
+        if args.control_command == "seed":
+            storage.seed_agent_controls()
+            return 0
+        if args.control_command == "show":
+            print(storage.load_agent_control().model_dump(mode="json"))
+            return 0
+        field = "kill_switch" if args.control_command in {"kill", "unkill"} else args.field
+        raw_value = (
+            "true"
+            if args.control_command == "kill"
+            else "false"
+            if args.control_command == "unkill"
+            else args.value
+        )
+        bool_fields = {"agent_enabled", "kill_switch", "shadow"}
+        decimal_fields = {"per_candidate_cap", "per_day_cap"}
+        try:
+            if field in bool_fields:
+                if raw_value.lower() not in {"true", "false"}:
+                    raise ValueError("must be true or false")
+                value: object = raw_value.lower() == "true"
+            elif field in decimal_fields:
+                value = Decimal(raw_value)
+                if value < 0:
+                    raise ValueError("must be non-negative")
+                value = str(value)
+            elif field in {"model_version", "prompt_version", "fallback_policy"}:
+                if field == "fallback_policy" and raw_value != "skip_all":
+                    raise ValueError("only skip_all fallback is supported")
+                value = raw_value
+            else:
+                raise ValueError("field is not allowed")
+        except (InvalidOperation, ValueError) as error:
+            parser.error(f"invalid control value: {error}")
+        storage.seed_agent_controls()
+        storage.set_agent_control(args.scope, field, value, args.actor)
+        return 0
+
     if args.command == "replay":
         from trader.config import Settings
+        from trader.control import ControlConfig
         from trader.db.storage import PostgresStorage
         from trader.replay import (
             AccountConfig,
@@ -212,6 +288,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
             if args.persist
             else None,
+            ControlConfig.model_validate(json.loads(args.control.read_text()))
+            if args.control
+            else ControlConfig(),
         )
         for account_id, result in results.items():
             write_output(
