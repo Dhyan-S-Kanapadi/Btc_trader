@@ -10,7 +10,7 @@ from typing import Protocol
 
 from trader.config import GuardrailSettings
 from trader.control import AgentGate
-from trader.guardrail import GUARDRAIL_VERSION, check_verdict
+from trader.guardrail import GUARDRAIL_VERSION, ToolResultRecord, check_verdict
 from trader.models import FrozenModel, Snapshot, Verdict
 
 from .breaker import CircuitBreaker
@@ -185,7 +185,24 @@ class AgentClient:
                 gate=gate,
                 call_id=call_id,
             )
-        guard = check_verdict(response.get("verdict", {}), snapshot, [], GuardrailSettings())
+        try:
+            raw_tools = response.get("tool_results", [])
+            if not isinstance(raw_tools, list):
+                raise ValueError("tool results must be a list")
+            tool_results = [ToolResultRecord.model_validate(item) for item in raw_tools]
+        except Exception:
+            if self.breaker is not None:
+                self.breaker.record_failure()
+            return _skip(
+                "agent_response_invalid",
+                target=self.target.name,
+                started=started,
+                gate=gate,
+                call_id=call_id,
+            )
+        guard = check_verdict(
+            response.get("verdict", {}), snapshot, tool_results, GuardrailSettings()
+        )
         status = str(response.get("status", "ok")) if guard.accepted else "agent_guardrail_rejected"
         if self.breaker is not None:
             self.breaker.record_success()
