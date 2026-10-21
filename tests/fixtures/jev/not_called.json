@@ -1,0 +1,7 @@
+{
+  "source": "Jev / Vercel AI Gateway",
+  "status": "not_called",
+  "recorded_at": "2026-10-21",
+  "reason": "A live call can incur token charges and the 20-item human labeling step is intentionally pending.",
+  "scrub_note": "This is call-status metadata, not a fabricated Jev response. No key, account identifier, input, or model output was stored."
+}
