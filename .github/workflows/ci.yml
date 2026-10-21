@@ -22,6 +22,7 @@ jobs:
           --health-retries 5
     env:
       DATABASE_URL: postgresql+psycopg://paper:paper@localhost:5432/paper_trader
+      DATABASE_URL_READONLY: postgresql+psycopg://paper_readonly:paper_readonly_local@localhost:5432/paper_trader
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
@@ -29,6 +30,8 @@ jobs:
           python-version: "3.12"
       - run: python -m pip install --upgrade pip
       - run: python -m pip install -e ".[dev]"
+      - run: >-
+          python -c "import os; import psycopg; con = psycopg.connect(os.environ['DATABASE_URL'].replace('postgresql+psycopg://', 'postgresql://')); con.execute(\"CREATE ROLE paper_readonly LOGIN PASSWORD 'paper_readonly_local' NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT\"); con.execute('GRANT CONNECT ON DATABASE paper_trader TO paper_readonly'); con.execute('GRANT USAGE ON SCHEMA public TO paper_readonly'); con.execute('GRANT SELECT ON ALL TABLES IN SCHEMA public TO paper_readonly'); con.execute('ALTER DEFAULT PRIVILEGES FOR ROLE paper IN SCHEMA public GRANT SELECT ON TABLES TO paper_readonly'); con.commit()"
       - run: python -m ruff check .
       - run: python -m ruff format --check .
       - run: python -m pytest

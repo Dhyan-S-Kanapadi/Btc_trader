@@ -15,7 +15,8 @@ def test_help_works(capsys) -> None:
     assert "worker" in capsys.readouterr().out
 
 
-def test_api_requires_readonly_database_url(capfd) -> None:
+def test_api_requires_readonly_database_url(capfd, monkeypatch) -> None:
+    monkeypatch.delenv("DATABASE_URL_READONLY", raising=False)
     assert main(["api"]) != 0
     _, stderr = capfd.readouterr()
     payload = json.loads(stderr)
