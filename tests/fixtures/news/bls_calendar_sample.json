@@ -1,0 +1,29 @@
+{
+  "source": "U.S. Bureau of Labor Statistics release calendar",
+  "source_url": "https://www.bls.gov/schedule/news_release/bls.ics",
+  "retrieved_at": "2026-10-21T06:37:31.428668+00:00",
+  "timezone_note": "BLS web calendar publishes schedule times in Eastern Time; DTSTART is retained exactly as supplied.",
+  "items": [
+    {
+      "scheduled_at": "20261021T100000",
+      "headline": "Usual Weekly Earnings of Wage and Salary Workers"
+    },
+    {
+      "scheduled_at": "20261028T100000",
+      "headline": "Quarterly Data Series on Business Employment Dynamics"
+    },
+    {
+      "scheduled_at": "20261028T100000",
+      "headline": "Metropolitan Area Employment and Unemployment (Monthly)"
+    },
+    {
+      "scheduled_at": "20261029T100000",
+      "headline": "Consumer Expenditures"
+    },
+    {
+      "scheduled_at": "20261030T083000",
+      "headline": "Employment Cost Index"
+    }
+  ],
+  "scrub_note": "Selected public schedule fields only; no credentials, account identifiers, descriptions, or article bodies."
+}
