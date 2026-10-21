@@ -101,6 +101,21 @@ class ApiSettings(BaseModel):
     max_limit: int = Field(500, ge=1, le=500)
 
 
+class AgentToolsSettings(BaseModel):
+    """Read-only evidence-tool assumptions; none are trading or model controls."""
+
+    api_base_url: str = "http://localhost:8000"
+    timeout_seconds: float = Field(5, gt=0)
+    max_retries: int = Field(1, ge=0, le=3)
+    max_candles_per_call: int = Field(1000, ge=1, le=5000)
+    max_calls_per_registry: int = Field(20, ge=1, le=100)
+    volume_lookback_bars: int = Field(24, gt=0)
+    volume_long_lookback_bars: int = Field(168, gt=0)
+    volatility_window_bars: int = Field(720, gt=0)
+    failed_breakout_confirm_bars: int = Field(6, gt=0)
+    trend_flat_band: Decimal = Field(Decimal("0.001"), ge=0)
+
+
 class Settings(BaseSettings):
     """All configuration sourced from environment variables or explicit test inputs."""
 
@@ -127,6 +142,7 @@ class Settings(BaseSettings):
     api: ApiSettings = Field(
         default_factory=ApiSettings, description="Read-only API settings section."
     )
+    agent_tools: AgentToolsSettings = Field(default_factory=AgentToolsSettings)
     database_url: str | None = Field(
         default=None,
         validation_alias="DATABASE_URL",

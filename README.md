@@ -331,3 +331,27 @@ trader control kill B --actor operator-name
 The CLI has strict typed, allowlisted updates. Each change and its self-reported actor are written
 atomically to an append-only PostgreSQL audit table; a PostgreSQL 16 trigger rejects audit updates
 and deletes. Offline replay accepts `--control path/to/control.json` and never reads DB controls.
+
+## Read-only agent tools
+
+`trader.agent_tools` provides evidence only; it cannot write, trade, change risk, or access exchange
+credentials. A candle is known at `as_of` only when `open_time + interval <= as_of`; equality is
+included. The harness binds `ToolRegistry(as_of=...)` to the candidate signal time. Model-facing
+schemas omit `as_of`, and an attempted supplied value is rejected. The API, HTTP source, and tool
+layer each enforce the boundary; a future candle is an `asof_violation`, never silently discarded.
+
+The tools return typed numbers, nulls with `insufficient_history`, and short labels only—never
+external free text. This is the prompt-injection posture. `volume_vs_average` compares the latest
+known volume to assumed 24-bar and 168-bar averages; the longer window supplements the snapshot's
+24-bar ratio. `higher_timeframe_trend` uses only complete UTC 4-hour or daily bars. `volatility_regime`
+uses the existing ATR with assumed 720-hour percentile bands (under 25% low, above 75% high).
+`recent_failed_breakouts` counts a breakout as failed only when a later known close is below its
+breakout level; incomplete confirmation windows are unresolved, not held. These defaults are
+assumptions, not validated strategy values.
+
+`GET /v1/candles` is read-only and returns ascending, known OHLCV candles with their derived close
+time and the request `as_of`; it has the existing API limit guard and synthetic metadata. Sources can
+be `InMemoryCandleSource` for local deterministic use or `HttpCandleSource` for the same read-only
+API. Calls log tool name, bound arguments, status, latency, fetched count, data-through, and an output
+digest without raw candle payloads. The API has no authentication today; #31/#34 must decide its
+deployment boundary before exposing it beyond a trusted network.

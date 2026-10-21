@@ -14,6 +14,7 @@ from trader.api import create_app
 from trader.config import Settings
 from trader.db.migrations import upgrade_head
 from trader.db.storage import PostgresStorage
+from trader.models import Candle
 
 
 @pytest.fixture
@@ -66,6 +67,20 @@ def api_client() -> tuple[TestClient, str]:
     if not storage.equity_exists("A", point_time):
         storage.save_equity_point("A", point_time, Decimal("9900"))
     storage.save_run_metadata("SYNTHETIC_REPLAY", {"source": "synthetic"})
+    storage.upsert_candles(
+        [
+            Candle(
+                symbol="BTCUSDT",
+                open_time=point_time,
+                open=Decimal("100"),
+                high=Decimal("101"),
+                low=Decimal("99"),
+                close=Decimal("100"),
+                volume=Decimal("2"),
+            )
+        ],
+        "1h",
+    )
     settings = Settings().model_copy(
         update={
             "database_url_readonly": readonly_test_url,
@@ -96,5 +111,10 @@ def test_readonly_role_and_api_contract(api_client: tuple[TestClient, str]) -> N
     assert Decimal(client.get("/v1/equity?account=A&limit=1").json()["items"][0]["equity"]) == 9900
     assert client.get("/v1/equity?start=2026-01-01").status_code == 422
     assert client.get("/v1/equity?limit=501").status_code == 422
+    candles = client.get("/v1/candles?as_of=2026-01-01T01:00:00Z&limit=1")
+    assert candles.status_code == 200
+    assert candles.json()["items"][0]["close_time"] == "2026-01-01T01:00:00Z"
+    assert client.get("/v1/candles?as_of=2026-01-01T00:00:00&limit=1").status_code == 422
+    assert client.get("/v1/candles?as_of=2026-01-01T01:00:00Z&limit=501").status_code == 422
     schema = client.get("/openapi.json").json()
     assert all(set(value) <= {"get"} for value in schema["paths"].values())
