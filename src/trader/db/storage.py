@@ -17,6 +17,7 @@ from trader.models import Candidate, Candle, Snapshot
 from .models import (
     AccountRow,
     AgentAccountControlRow,
+    AgentCallRow,
     AgentControlAuditRow,
     AgentGlobalControlRow,
     CandidateRow,
@@ -86,6 +87,10 @@ class PaperStorage(Protocol):
     def candle_routed_for_accounts(
         self, symbol: str, interval: str, open_time: datetime, account_ids: list[str]
     ) -> bool: ...
+
+    def load_agent_call(self, request_key: str) -> dict[str, object] | None: ...
+
+    def save_agent_call(self, request_key: str, payload: dict[str, object]) -> UUID: ...
 
     def candle_id(self, symbol: str, interval: str, open_time: datetime) -> UUID: ...
 
@@ -266,6 +271,7 @@ class PostgresStorage:
                 .where(
                     RoutedCandleRow.candle_id == candle_id,
                     RoutedCandleRow.account_id.in_(account_ids),
+                    RoutedCandleRow.phase == "complete",
                 )
             )
             return count == len(account_ids)
@@ -375,7 +381,12 @@ class PostgresStorage:
             )
 
     def persist_routed_candle(
-        self, interval: str, candle: Candle, results: object, reason: str | None = None
+        self,
+        interval: str,
+        candle: Candle,
+        results: object,
+        reason: str | None = None,
+        phase: str = "complete",
     ) -> None:
         """Atomically persist a routed candle, states, evidence, and its durable checkpoints."""
 
@@ -515,8 +526,80 @@ class PostgresStorage:
                     is None
                 ):
                     session.add(
-                        RoutedCandleRow(account_id=account_id, candle_id=candle_id, reason=reason)
+                        RoutedCandleRow(
+                            account_id=account_id, candle_id=candle_id, phase=phase, reason=reason
+                        )
                     )
+                else:
+                    checkpoint = session.scalar(
+                        select(RoutedCandleRow).where(
+                            RoutedCandleRow.account_id == account_id,
+                            RoutedCandleRow.candle_id == candle_id,
+                        )
+                    )
+                    assert checkpoint is not None
+                    checkpoint.phase = phase
+                    checkpoint.reason = reason
+
+    def candle_phase_one_for_accounts(
+        self, symbol: str, interval: str, open_time: datetime, account_ids: list[str]
+    ) -> bool:
+        """Return whether the atomic no-agent phase is durable for every account."""
+
+        if not account_ids:
+            return True
+        with self._sessions() as session:
+            candle_id = session.scalar(
+                select(CandleRow.id).where(
+                    CandleRow.symbol == symbol,
+                    CandleRow.interval == interval,
+                    CandleRow.open_time == open_time,
+                )
+            )
+            if candle_id is None:
+                return False
+            count = session.scalar(
+                select(func.count())
+                .select_from(RoutedCandleRow)
+                .where(
+                    RoutedCandleRow.candle_id == candle_id,
+                    RoutedCandleRow.account_id.in_(account_ids),
+                    RoutedCandleRow.phase == "phase_one",
+                )
+            )
+            return count == len(account_ids)
+
+    def load_agent_call(self, request_key: str) -> dict[str, object] | None:
+        """Load only completed reusable outcomes; transient failures are never cached."""
+
+        with self._sessions() as session:
+            row = session.scalar(
+                select(AgentCallRow).where(AgentCallRow.request_key == request_key)
+            )
+            if row is None or row.result_json is None:
+                return None
+            return dict(row.result_json)
+
+    def save_agent_call(self, request_key: str, payload: dict[str, object]) -> UUID:
+        """Persist a sanitized agent outcome in its own short transaction."""
+
+        with self._sessions.begin() as session:
+            row = session.scalar(
+                select(AgentCallRow).where(AgentCallRow.request_key == request_key)
+            )
+            if row is None:
+                row = AgentCallRow(
+                    request_key=request_key,
+                    variant=str(payload["variant"]),
+                    candidate_key=str(payload["candidate_key"]),
+                    snapshot_digest=str(payload["snapshot_digest"]),
+                    target=str(payload["target"]),
+                    status=str(payload["status"]),
+                    result_json=payload,
+                )
+                session.add(row)
+                session.flush()
+            return row.id
 
     def candle_id(self, symbol: str, interval: str, open_time: datetime) -> UUID:
         """Return the durable natural-key candle identifier after an idempotent upsert."""

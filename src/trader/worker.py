@@ -15,7 +15,9 @@ from trader.control import ControlConfig, resolve_agent_gate
 from trader.data.binance import BinanceIngestor, interval_delta, latest_freshness
 from trader.db.storage import PostgresStorage
 from trader.logging import configure_logging
-from trader.replay import AccountConfig, load_account_state, route_candle
+from trader.replay import AccountConfig, PhaseOneResult, load_account_state, route_candle
+from trader.replay.engine import EquityPoint
+from trader.replay.router import route_candle_phase_one, route_candle_phase_two
 
 
 class Clock(Protocol):
@@ -102,13 +104,57 @@ def run_cycle(storage: PostgresStorage, accounts, settings: Settings, now: datet
         ):
             continue
         catchup = latest_open - candle.open_time > interval_delta(settings.strategy.interval)
-        kwargs = {"allow_entries": not catchup}
-        # Small compatibility seam for test doubles; production router always receives the snapshot.
-        if "control" in inspect.signature(route_candle).parameters:
-            kwargs["control"] = control
-        results = route_candle(accounts, history, candle, settings, freshness.stale, **kwargs)
+        if not hasattr(storage, "candle_phase_one_for_accounts"):
+            kwargs = {"allow_entries": not catchup}
+            if "control" in inspect.signature(route_candle).parameters:
+                kwargs["control"] = control
+            results = route_candle(accounts, history, candle, settings, freshness.stale, **kwargs)
+            storage.persist_routed_candle(
+                settings.strategy.interval, candle, results, "stale_catchup" if catchup else None
+            )
+            for account_id, result in results.items():
+                accounts[account_id] = (result.state, accounts[account_id][1])
+            routed += 1
+            continue
+        if storage.candle_phase_one_for_accounts(
+            candle.symbol, settings.strategy.interval, candle.open_time, enabled_ids
+        ):
+            phase_one = {
+                account_id: PhaseOneResult(
+                    state=state,
+                    equity_point=EquityPoint(
+                        recorded_at=candle.open_time, equity=state.risk.equity
+                    ),
+                )
+                for account_id, (state, _account) in accounts.items()
+            }
+        else:
+            phase_one = route_candle_phase_one(accounts, history, candle, settings, freshness.stale)
+            storage.persist_routed_candle(
+                settings.strategy.interval,
+                candle,
+                phase_one,
+                "stale_catchup" if catchup else None,
+                phase="phase_one",
+            )
+            for account_id, result in phase_one.items():
+                accounts[account_id] = (result.state, accounts[account_id][1])
+        results = route_candle_phase_two(
+            accounts,
+            history,
+            candle,
+            settings,
+            phase_one,
+            freshness.stale,
+            allow_entries=not catchup,
+            control=control,
+        )
         storage.persist_routed_candle(
-            settings.strategy.interval, candle, results, "stale_catchup" if catchup else None
+            settings.strategy.interval,
+            candle,
+            results,
+            "stale_catchup" if catchup else None,
+            phase="complete",
         )
         for account_id, result in results.items():
             accounts[account_id] = (result.state, accounts[account_id][1])
