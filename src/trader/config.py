@@ -116,6 +116,19 @@ class AgentToolsSettings(BaseModel):
     trend_flat_band: Decimal = Field(Decimal("0.001"), ge=0)
 
 
+class GuardrailSettings(BaseModel):
+    """Fail-closed output validation assumptions, not trading parameters."""
+
+    max_raw_bytes: int = Field(4096, gt=0)
+    max_depth: int = Field(12, gt=0)
+    max_reasons: int = Field(5, gt=0)
+    max_reason_length: int = Field(240, gt=0)
+    max_reason_total: int = Field(800, gt=0)
+    min_citations: int = Field(1, gt=0)
+    min_citations_take: int = Field(2, gt=0)
+    max_citations: int = Field(12, gt=0)
+
+
 class Settings(BaseSettings):
     """All configuration sourced from environment variables or explicit test inputs."""
 
@@ -143,6 +156,7 @@ class Settings(BaseSettings):
         default_factory=ApiSettings, description="Read-only API settings section."
     )
     agent_tools: AgentToolsSettings = Field(default_factory=AgentToolsSettings)
+    guardrail: GuardrailSettings = Field(default_factory=GuardrailSettings)
     database_url: str | None = Field(
         default=None,
         validation_alias="DATABASE_URL",
