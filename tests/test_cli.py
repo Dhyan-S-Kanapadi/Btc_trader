@@ -15,14 +15,14 @@ def test_help_works(capsys) -> None:
     assert "worker" in capsys.readouterr().out
 
 
-@pytest.mark.parametrize("command", ["api"])
-def test_subcommands_log_json_and_exit_nonzero(command: str, capfd) -> None:
-    assert main([command]) != 0
+def test_api_requires_readonly_database_url(capfd, monkeypatch) -> None:
+    monkeypatch.delenv("DATABASE_URL_READONLY", raising=False)
+    assert main(["api"]) != 0
     _, stderr = capfd.readouterr()
     payload = json.loads(stderr)
 
-    assert payload["command"] == command
-    assert payload["message"].startswith("not implemented yet (issue #")
+    assert payload["command"] == "api"
+    assert payload["message"] == "DATABASE_URL_READONLY is required for trader api"
 
 
 def test_synthetic_replay_writes_stable_labeled_files(tmp_path, capfd) -> None:

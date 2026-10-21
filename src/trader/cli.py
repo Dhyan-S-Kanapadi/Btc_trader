@@ -43,8 +43,8 @@ def build_parser() -> argparse.ArgumentParser:
     report.add_argument("--start", help="Inclusive UTC ISO-8601 timestamp.")
     report.add_argument("--end", help="Inclusive UTC ISO-8601 timestamp.")
     report.add_argument("--output-dir", type=Path, default=Path("report-output"))
-    for command in ("worker", "api"):
-        subcommands.add_parser(command, help=f"Reserved for issue #{_COMMAND_ISSUES[command]}.")
+    subcommands.add_parser("worker", help=f"Reserved for issue #{_COMMAND_ISSUES['worker']}.")
+    subcommands.add_parser("api", help="Run the read-only paper-trading HTTP API.")
     return parser
 
 
@@ -120,6 +120,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     "policy_name": policy_name,
                     "starting_equity": str(settings.risk.starting_equity),
                     "enabled": True,
+                    "risk": settings.risk.model_dump(mode="json"),
                 },
             )
         configure_logging().info("paper accounts seeded", extra={"command": "seed-accounts"})
@@ -271,6 +272,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         from trader.worker import run_worker
 
         return run_worker(Settings())
+
+    if args.command == "api":
+        from trader.api import run_api
+        from trader.config import Settings
+
+        return run_api(Settings())
 
     issue = _COMMAND_ISSUES[args.command]
     configure_logging().error(

@@ -91,6 +91,16 @@ class WorkerSettings(BaseModel):
     lock_key: int = Field(13_000_001, description="PostgreSQL advisory-lock key.")
 
 
+class ApiSettings(BaseModel):
+    """Read-only HTTP API settings; credentials never fall back to the writer URL."""
+
+    host: str = "0.0.0.0"
+    port: int = Field(8000, ge=1, le=65535)
+    allowed_origins: str = ""
+    default_limit: int = Field(100, ge=1, le=500)
+    max_limit: int = Field(500, ge=1, le=500)
+
+
 class Settings(BaseSettings):
     """All configuration sourced from environment variables or explicit test inputs."""
 
@@ -114,8 +124,16 @@ class Settings(BaseSettings):
     worker: WorkerSettings = Field(
         default_factory=WorkerSettings, description="Worker settings section."
     )
+    api: ApiSettings = Field(
+        default_factory=ApiSettings, description="Read-only API settings section."
+    )
     database_url: str | None = Field(
         default=None,
         validation_alias="DATABASE_URL",
         description="PostgreSQL connection URL; required only by database commands.",
+    )
+    database_url_readonly: str | None = Field(
+        default=None,
+        validation_alias="DATABASE_URL_READONLY",
+        description="PostgreSQL read-only API connection URL; never falls back to DATABASE_URL.",
     )
