@@ -118,6 +118,8 @@ def step(
     policy: DecisionPolicy,
     config: Settings,
     signal: SharedSignal | None = None,
+    data_is_stale: bool = False,
+    allow_entries: bool = True,
 ) -> StepResult:
     """Process one closed candle: fill, exit, mark/roll day, then signal and queue next entry."""
 
@@ -138,7 +140,7 @@ def step(
             estimated,
             risk.model_copy(update={"open_position_count": 0}),
             candle.open_time,
-            False,
+            data_is_stale,
             config,
         )
         risk = fill_risk.updated_state
@@ -215,7 +217,7 @@ def step(
                 candidate=candidate, snapshot=build_snapshot(history, candidate, config.strategy)
             )
         )
-    if signal is not None:
+    if signal is not None and allow_entries:
         candidate, snapshot = signal.candidate, signal.snapshot
         policy_decision = policy.decide(snapshot, candidate)
         risk_decision = None
@@ -226,7 +228,7 @@ def step(
                 candidate.reference_price,
                 risk.model_copy(update={"open_position_count": occupied}),
                 candle.open_time,
-                False,
+                data_is_stale,
                 config,
             )
             risk = risk_decision.updated_state

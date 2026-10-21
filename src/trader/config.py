@@ -82,6 +82,15 @@ class ReportSettings(BaseModel):
     )
 
 
+class WorkerSettings(BaseModel):
+    """Paper-worker scheduling and recovery settings."""
+
+    candle_close_buffer_seconds: int = Field(10, ge=0, description="Delay after candle close.")
+    poll_retry_seconds: int = Field(30, gt=0, description="Retry delay after a failed cycle.")
+    max_cycle_failures: int = Field(3, gt=0, description="Consecutive failures before exit.")
+    lock_key: int = Field(13_000_001, description="PostgreSQL advisory-lock key.")
+
+
 class Settings(BaseSettings):
     """All configuration sourced from environment variables or explicit test inputs."""
 
@@ -101,6 +110,9 @@ class Settings(BaseSettings):
     )
     report: ReportSettings = Field(
         default_factory=ReportSettings, description="Report assumptions section."
+    )
+    worker: WorkerSettings = Field(
+        default_factory=WorkerSettings, description="Worker settings section."
     )
     database_url: str | None = Field(
         default=None,

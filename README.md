@@ -215,6 +215,37 @@ choices.
 
 shortcut: Completed trades are idempotently recognized by account, entry-candidate reason, and exit time; add a database unique constraint when the trade schema gains a durable execution identifier.
 
+## Live paper worker
+
+`trader worker` is the only continuous worker entrypoint. It is **PAPER TRADING ONLY**: it uses the
+public Binance candle endpoint, PostgreSQL, and the existing paper replay/router/risk path; it has no
+exchange keys, signed requests, account endpoints, or order-placement endpoints. Run migrations and
+seed accounts first:
+
+```powershell
+trader migrate
+trader seed-accounts
+trader worker
+```
+
+The worker waits for each configured candle close plus `TRADER_WORKER__CANDLE_CLOSE_BUFFER_SECONDS`
+(default `10`), backfills only closed candles, then routes every not-yet-routed candle chronologically.
+`TRADER_WORKER__POLL_RETRY_SECONDS`, `TRADER_WORKER__MAX_CYCLE_FAILURES`, and
+`TRADER_WORKER__LOCK_KEY` control failure retries, the consecutive-failure exit threshold, and the
+PostgreSQL session advisory-lock key. PostgreSQL and Amazon RDS for PostgreSQL support advisory locks.
+
+Each account/candle completion is an atomic transaction containing candle evidence, decisions/orders,
+trades, equity, serialized engine state, and a `routed_candles` checkpoint. The checkpoint is the
+already-routed marker; a restart reloads durable engine state and cannot skip a partially persisted
+candle or duplicate its effects. The lock remains on one dedicated PostgreSQL connection; a probe on
+that same connection detects loss and exits non-zero.
+
+Freshness is calculated once per cycle and passed to the risk path, so stale data prevents new entries
+while exit, trailing-stop, time-stop, and equity processing continue. During catch-up, candles more
+than one interval behind the newest closed candle also process exits and marks but cannot create a
+pending entry; their per-account durable checkpoint has reason `stale_catchup`. The newest eligible
+candle may create a pending entry. This explicitly resolves the catch-up ambiguity.
+
 ## Variant report
 
 `trader report` is a read-only, one-off PostgreSQL job for comparing the selected paper accounts
