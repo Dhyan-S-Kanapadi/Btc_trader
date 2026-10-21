@@ -266,6 +266,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         configure_logging().info("report complete", extra={"accounts": account_ids})
         return 0
 
+    if args.command == "worker":
+        from trader.config import Settings
+        from trader.worker import run_worker
+
+        return run_worker(Settings())
+
     issue = _COMMAND_ISSUES[args.command]
     configure_logging().error(
         f"not implemented yet (issue #{issue})",

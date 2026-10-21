@@ -8,8 +8,7 @@ from decimal import Decimal
 from pydantic import Field
 
 from trader.config import Settings
-from trader.db.models import TradeRow
-from trader.db.storage import DecisionWrite, OrderWrite, PostgresStorage
+from trader.db.storage import PostgresStorage
 from trader.models import Candle, FrozenModel
 from trader.risk import AccountState
 from trader.strategy import build_snapshot, evaluate_candle
@@ -63,6 +62,8 @@ def route_candle(
     history: Sequence[Candle],
     candle: Candle,
     settings: Settings,
+    data_is_stale: bool = False,
+    allow_entries: bool = True,
 ) -> dict[str, StepResult]:
     """Route one closed candle independently, sharing exactly one candidate and snapshot."""
 
@@ -81,7 +82,14 @@ def route_candle(
             continue
         try:
             results[account_id] = step(
-                state, history, candle, policy_for(account.policy_name, settings), settings, signal
+                state,
+                history,
+                candle,
+                policy_for(account.policy_name, settings),
+                settings,
+                signal,
+                data_is_stale,
+                allow_entries,
             )
         except Exception:
             logger.exception("account routing failed", extra={"account_id": account_id})
@@ -173,43 +181,4 @@ def persist_routed_candle(
 ) -> None:
     """Persist one routed bar, writing shared evidence once and account decisions atomically."""
 
-    storage.upsert_candles([candle], interval)
-    for account_id, result in results.items():
-        for decision in result.decisions:
-            key = decision.candidate.idempotency_key
-            candidate_id = storage.candidate_id(key)
-            if candidate_id is None:
-                candidate_id = storage.save_candidate(
-                    decision.candidate,
-                    storage.candle_id(candle.symbol, interval, decision.candidate.signal_time),
-                )
-                storage.save_snapshot(candidate_id, decision.snapshot)
-            if not storage.decision_exists(account_id, key):
-                storage.save_decision_and_order(
-                    DecisionWrite(
-                        account_id,
-                        candidate_id,
-                        key,
-                        decision.action,
-                        decision.reason,
-                        verdict={"risk_code": decision.risk_code}
-                        if decision.risk_code is not None
-                        else None,
-                    ),
-                    OrderWrite(
-                        account_id,
-                        candidate_id,
-                        key,
-                        "BUY",
-                        Decimal("0"),
-                        "ROUTED",
-                        reference_price=decision.candidate.reference_price,
-                    ),
-                )
-        point = result.equity_point
-        if not storage.equity_exists(account_id, point.recorded_at):
-            storage.save_equity_point(account_id, point.recorded_at, point.equity)
-        for trade in result.trades:
-            if not storage.trade_exists(account_id, trade.reason, trade.exit_time):
-                storage.save_trade(TradeRow(**trade.model_dump()))
-        save_account_state(storage, result.state)
+    storage.persist_routed_candle(interval, candle, results)

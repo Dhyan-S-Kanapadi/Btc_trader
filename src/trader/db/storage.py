@@ -23,6 +23,7 @@ from .models import (
     EquityPointRow,
     OrderRow,
     PositionRow,
+    RoutedCandleRow,
     RunMetadataRow,
     SnapshotRow,
     TradeRow,
@@ -78,6 +79,10 @@ class PaperStorage(Protocol):
     ) -> list[Candle]: ...
 
     def account_has_replay_rows(self, account_id: str) -> bool: ...
+
+    def candle_routed_for_accounts(
+        self, symbol: str, interval: str, open_time: datetime, account_ids: list[str]
+    ) -> bool: ...
 
     def candle_id(self, symbol: str, interval: str, open_time: datetime) -> UUID: ...
 
@@ -234,6 +239,180 @@ class PostgresStorage:
                 is not None
                 for model in (DecisionRow, OrderRow, PositionRow, TradeRow, EquityPointRow)
             )
+
+    def candle_routed_for_accounts(
+        self, symbol: str, interval: str, open_time: datetime, account_ids: list[str]
+    ) -> bool:
+        """Return whether every enabled account durably completed this candle."""
+
+        if not account_ids:
+            return True
+        with self._sessions() as session:
+            candle_id = session.scalar(
+                select(CandleRow.id).where(
+                    CandleRow.symbol == symbol,
+                    CandleRow.interval == interval,
+                    CandleRow.open_time == open_time,
+                )
+            )
+            if candle_id is None:
+                return False
+            count = session.scalar(
+                select(func.count())
+                .select_from(RoutedCandleRow)
+                .where(
+                    RoutedCandleRow.candle_id == candle_id,
+                    RoutedCandleRow.account_id.in_(account_ids),
+                )
+            )
+            return count == len(account_ids)
+
+    def verify_worker_schema(self) -> None:
+        """Fail startup before routing when the worker migration has not been applied."""
+
+        with self._sessions() as session:
+            session.execute(select(RoutedCandleRow.id).limit(1))
+
+    def persist_routed_candle(
+        self, interval: str, candle: Candle, results: object, reason: str | None = None
+    ) -> None:
+        """Atomically persist a routed candle, states, evidence, and its durable checkpoints."""
+
+        routed = results  # Kept structural to avoid coupling storage to the pure replay package.
+        with self._sessions.begin() as session:
+            values = {
+                "symbol": candle.symbol,
+                "interval": interval,
+                "open_time": candle.open_time,
+                "open": candle.open,
+                "high": candle.high,
+                "low": candle.low,
+                "close": candle.close,
+                "volume": candle.volume,
+            }
+            statement = (
+                insert(CandleRow)
+                .values(values)
+                .on_conflict_do_update(
+                    constraint="candles_symbol_interval_open_time_key",
+                    set_={
+                        name: getattr(insert(CandleRow).excluded, name)
+                        for name in values
+                        if name not in {"symbol", "interval", "open_time"}
+                    },
+                )
+            )
+            session.execute(statement)
+            candle_id = session.scalar(
+                select(CandleRow.id).where(
+                    CandleRow.symbol == candle.symbol,
+                    CandleRow.interval == interval,
+                    CandleRow.open_time == candle.open_time,
+                )
+            )
+            assert candle_id is not None
+            for account_id, result in routed.items():
+                for decision in result.decisions:
+                    candidate_id = session.scalar(
+                        select(CandidateRow.id).where(
+                            CandidateRow.idempotency_key == decision.candidate.idempotency_key
+                        )
+                    )
+                    if candidate_id is None:
+                        candidate = CandidateRow(
+                            candle_id=candle_id, **decision.candidate.model_dump()
+                        )
+                        session.add(candidate)
+                        session.flush()
+                        candidate_id = candidate.id
+                        session.add(
+                            SnapshotRow(
+                                candidate_id=candidate_id,
+                                schema_version=decision.snapshot.schema_version,
+                                snapshot=decision.snapshot.model_dump(mode="json"),
+                            )
+                        )
+                    exists = session.scalar(
+                        select(DecisionRow.id).where(
+                            DecisionRow.account_id == account_id,
+                            DecisionRow.candidate_idempotency_key
+                            == decision.candidate.idempotency_key,
+                        )
+                    )
+                    if exists is None:
+                        session.add(
+                            DecisionRow(
+                                account_id=account_id,
+                                candidate_id=candidate_id,
+                                candidate_idempotency_key=decision.candidate.idempotency_key,
+                                action=decision.action,
+                                reason=reason or decision.reason,
+                                verdict={"risk_code": decision.risk_code}
+                                if decision.risk_code is not None
+                                else None,
+                            )
+                        )
+                        session.add(
+                            OrderRow(
+                                account_id=account_id,
+                                candidate_id=candidate_id,
+                                candidate_idempotency_key=decision.candidate.idempotency_key,
+                                side="BUY",
+                                qty=Decimal("0"),
+                                status="ROUTED",
+                                reference_price=decision.candidate.reference_price,
+                            )
+                        )
+                point = result.equity_point
+                if (
+                    session.scalar(
+                        select(EquityPointRow.id).where(
+                            EquityPointRow.account_id == account_id,
+                            EquityPointRow.recorded_at == point.recorded_at,
+                        )
+                    )
+                    is None
+                ):
+                    session.add(
+                        EquityPointRow(
+                            account_id=account_id,
+                            recorded_at=point.recorded_at,
+                            equity=point.equity,
+                        )
+                    )
+                for trade in result.trades:
+                    if (
+                        session.scalar(
+                            select(TradeRow.id).where(
+                                TradeRow.account_id == account_id,
+                                TradeRow.reason == trade.reason,
+                                TradeRow.exit_time == trade.exit_time,
+                            )
+                        )
+                        is None
+                    ):
+                        session.add(TradeRow(**trade.model_dump()))
+                state = result.state
+                row = session.get(AccountRow, account_id)
+                if row is None:
+                    raise LookupError(f"account does not exist: {account_id}")
+                row.cash = state.cash
+                row.equity = state.risk.equity
+                row.peak_equity = state.risk.peak_equity
+                row.halted = state.risk.halted
+                row.engine_state = state.model_dump(mode="json")
+                if (
+                    session.scalar(
+                        select(RoutedCandleRow.id).where(
+                            RoutedCandleRow.account_id == account_id,
+                            RoutedCandleRow.candle_id == candle_id,
+                        )
+                    )
+                    is None
+                ):
+                    session.add(
+                        RoutedCandleRow(account_id=account_id, candle_id=candle_id, reason=reason)
+                    )
 
     def candle_id(self, symbol: str, interval: str, open_time: datetime) -> UUID:
         """Return the durable natural-key candle identifier after an idempotent upsert."""

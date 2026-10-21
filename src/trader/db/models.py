@@ -175,6 +175,18 @@ class EquityPointRow(Base):
     equity: Mapped[Decimal] = mapped_column(MONEY)
 
 
+class RoutedCandleRow(Base):
+    """Durable worker checkpoint: one fully persisted account/candle transition."""
+
+    __tablename__ = "routed_candles"
+    __table_args__ = (UniqueConstraint("account_id", "candle_id"),)
+
+    id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
+    account_id: Mapped[str] = mapped_column(ForeignKey("accounts.account_id"))
+    candle_id: Mapped[UUID] = mapped_column(ForeignKey("candles.id"))
+    reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
 class ConfigRow(Base):
     """Per-account non-secret configuration snapshot."""
 

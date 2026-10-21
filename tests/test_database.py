@@ -24,6 +24,7 @@ from trader.replay import (
     run_replay,
     run_routed_replay,
 )
+from trader.worker import WorkerLock
 
 EXPECTED_TABLES = {
     "accounts",
@@ -35,6 +36,7 @@ EXPECTED_TABLES = {
     "orders",
     "positions",
     "run_metadata",
+    "routed_candles",
     "snapshots",
     "trades",
 }
@@ -225,6 +227,18 @@ def test_router_persists_each_account_once_and_restores_state(storage: PostgresS
         lambda candle, routed: persist_routed_candle(storage, "1h", candle, routed),
     )
     assert rerun["B"].state.position is None
+
+
+def test_postgres_advisory_lock_allows_only_one_worker(storage: PostgresStorage) -> None:
+    first = WorkerLock(storage, 13_000_013)
+    second = WorkerLock(storage, 13_000_013)
+    try:
+        assert first.acquire()
+        assert not second.acquire()
+        assert first.healthy()
+    finally:
+        first.close()
+        second.close()
 
 
 def test_seeded_multi_account_cli_persists_to_a_fresh_database(
