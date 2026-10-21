@@ -48,6 +48,7 @@ class ToolRegistry:
         if as_of.tzinfo is None or as_of.utcoffset() is None:
             raise ValueError("as_of must be timezone-aware")
         self.as_of, self.source, self.config, self.calls = as_of, source, config, 0
+        self.records: list[dict[str, object]] = []
         self._models = {
             "volume_vs_average": VolumeInput,
             "higher_timeframe_trend": TrendInput,
@@ -82,6 +83,9 @@ class ToolRegistry:
             fetched = len(candles)
             enforce_as_of(candles, self.as_of, self.config.strategy.interval)
             output = getattr(self, f"_{name}")(candles, model)
+            self.records.append(
+                {"tool_name": name, "as_of": self.as_of, "args": args, "output": output}
+            )
             return output
         except ToolError as error:
             status = error.code
