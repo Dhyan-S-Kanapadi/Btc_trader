@@ -129,6 +129,20 @@ class GuardrailSettings(BaseModel):
     max_citations: int = Field(12, gt=0)
 
 
+class AgentSettings(BaseModel):
+    """Pinned investigator plumbing caps; these do not grant trading authority."""
+
+    model_id: str | None = None
+    prompt_version: str = "investigator_v1"
+    step_cap: int = Field(3, gt=0)
+    max_tokens_per_call: int = Field(512, gt=0)
+    max_total_tokens: int = Field(1024, gt=0)
+    wall_clock_seconds: float = Field(15, gt=0)
+    checkpoint_database_url: str | None = Field(
+        default=None, validation_alias="AGENT_CHECKPOINT_DATABASE_URL"
+    )
+
+
 class Settings(BaseSettings):
     """All configuration sourced from environment variables or explicit test inputs."""
 
@@ -157,6 +171,7 @@ class Settings(BaseSettings):
     )
     agent_tools: AgentToolsSettings = Field(default_factory=AgentToolsSettings)
     guardrail: GuardrailSettings = Field(default_factory=GuardrailSettings)
+    agent: AgentSettings = Field(default_factory=AgentSettings)
     database_url: str | None = Field(
         default=None,
         validation_alias="DATABASE_URL",
