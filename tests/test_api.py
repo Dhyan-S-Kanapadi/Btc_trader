@@ -12,7 +12,8 @@ def _settings(url: str = "postgresql+psycopg://paper_readonly:paper@localhost:1/
     return base.model_copy(update={"database_url_readonly": url})
 
 
-def test_api_refuses_missing_readonly_url() -> None:
+def test_api_refuses_missing_readonly_url(monkeypatch) -> None:
+    monkeypatch.delenv("DATABASE_URL_READONLY", raising=False)
     with pytest.raises(RuntimeError, match="DATABASE_URL_READONLY"):
         create_app(Settings())
 

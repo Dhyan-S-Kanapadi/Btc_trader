@@ -496,12 +496,16 @@ def _halt_reason(state: dict[str, object] | None) -> str | None:
 
 
 def _daily(points: list[EquityPointRow], starting: Decimal) -> dict[str, Decimal]:
+    """Compare each UTC day's final mark to the preceding final mark or starting equity."""
+
+    final: dict[str, Decimal] = {}
+    for point in points:
+        final[point.recorded_at.astimezone(UTC).date().isoformat()] = point.equity
     result: dict[str, Decimal] = {}
     previous = starting
-    for point in points:
-        key = point.recorded_at.astimezone(UTC).date().isoformat()
-        result[key] = point.equity - previous
-        previous = point.equity
+    for key, value in final.items():
+        result[key] = value - previous
+        previous = value
     return result
 
 
