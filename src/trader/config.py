@@ -4,7 +4,7 @@
 
 from decimal import Decimal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -156,6 +156,31 @@ class AgentTracingSettings(BaseModel):
     dataset_prefix: str = "btc-paper-agent-failures"
 
 
+class AgentMemorySettings(BaseModel):
+    """Fixed local embeddings and exact retrieval; every default is an assumption."""
+
+    enabled: bool = False
+    database_url: str | None = Field(default=None, validation_alias="AGENT_MEMORY_DATABASE_URL")
+    write_database_url: str | None = Field(
+        default=None, validation_alias="AGENT_MEMORY_WRITE_DATABASE_URL"
+    )
+    namespace: str = "live"
+    embedder: str = Field("deterministic_v1", pattern="^deterministic_v1$")
+    k_cap: int = Field(5, ge=1, le=20)
+    max_distance: float = Field(2.0, gt=0)
+    min_sample: int = Field(3, ge=1)
+    volume_ratio_lo: float = 0.0
+    volume_ratio_hi: float = 5.0
+    breakout_strength_lo: float = -2.0
+    breakout_strength_hi: float = 5.0
+    atr_pct_lo: float = 0.0
+    atr_pct_hi: float = 0.2
+    range_pct_lo: float = 0.0
+    range_pct_hi: float = 0.5
+    trend_lo: float = -0.2
+    trend_hi: float = 0.2
+
+
 class AgentClientSettings(BaseModel):
     """Worker-side safety bounds; defaults are conservative operational assumptions."""
 
@@ -200,6 +225,19 @@ class Settings(BaseSettings):
     guardrail: GuardrailSettings = Field(default_factory=GuardrailSettings)
     agent: AgentSettings = Field(default_factory=AgentSettings)
     agent_tracing: AgentTracingSettings = Field(default_factory=AgentTracingSettings)
+    agent_memory: AgentMemorySettings = Field(default_factory=AgentMemorySettings)
+    agent_memory_database_url: str | None = Field(
+        default=None,
+        validation_alias="AGENT_MEMORY_DATABASE_URL",
+        exclude=True,
+        repr=False,
+    )
+    agent_memory_write_database_url: str | None = Field(
+        default=None,
+        validation_alias="AGENT_MEMORY_WRITE_DATABASE_URL",
+        exclude=True,
+        repr=False,
+    )
     agent_client: AgentClientSettings = Field(default_factory=AgentClientSettings)
     database_url: str | None = Field(
         default=None,
@@ -211,3 +249,19 @@ class Settings(BaseSettings):
         validation_alias="DATABASE_URL_READONLY",
         description="PostgreSQL read-only API connection URL; never falls back to DATABASE_URL.",
     )
+
+    @model_validator(mode="after")
+    def apply_agent_memory_database_url(self) -> "Settings":
+        """Keep the separate-memory URL out of nested config names and logs."""
+
+        if (
+            self.agent_memory_database_url is not None
+            or self.agent_memory_write_database_url is not None
+        ):
+            self.agent_memory = self.agent_memory.model_copy(
+                update={
+                    "database_url": self.agent_memory_database_url,
+                    "write_database_url": self.agent_memory_write_database_url,
+                }
+            )
+        return self

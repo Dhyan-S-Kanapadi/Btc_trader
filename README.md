@@ -392,3 +392,24 @@ dashboard and filter by run id until a workspace-specific URL template is config
 Tracing shows what the agent did, not whether it was right. Before raw news or Jev text is introduced,
 the payload and licensing policy must be reviewed again. Dataset export/evaluation labels remain future
 work; this issue deliberately does not claim they exist.
+
+## Time-gated episodic memory
+
+Memory is optional, agent-only, and lives in a separate `agent_memory` PostgreSQL database—not the
+trading database. An episode is an Account A candidate with a closed trade: its outcome is net R after
+fees, exit reason, and bars held. Candidates that A did not take have no episode; this is a selection
+effect. `known_at` is the close of the candle that processed the exit, not the fill time.
+
+Retrieval applies the same invariant three times: SQL requires `known_at <= as_of` and candidate time
+strictly before `as_of`; the tool verifies every returned row and raises `asof_violation` if a source leaks;
+and the service uses a SELECT-only role. Namespaces keep `live` and `synthetic:<run>` data apart. The
+embedding is a fixed five-value, clipped-and-scaled deterministic vector. Its constants are assumptions,
+never fitted from history; null features are not embeddable. Search is exact L2 with deterministic ties,
+not ANN, because correctness matters more than speed at this scale.
+
+Run `sql/agent_memory_init.sql` once as the memory database owner. The agent receives only
+`AGENT_MEMORY_DATABASE_URL` (the reader credential); `trader memory init` and `trader memory sync` require
+the separate `AGENT_MEMORY_WRITE_DATABASE_URL`. The memory tool appears only when memory is enabled and the
+request variant is `memory`. It returns historical cases and distances, not probabilities or trading advice.
+This proves only that the retrieval plumbing is time-gated; it does not prove memory improves outcomes. Live
+per-cycle sync and Account D wiring remain Issue #27.
