@@ -206,6 +206,7 @@ class AgentCallRow(Base):
     snapshot_digest: Mapped[str] = mapped_column(String(128))
     target: Mapped[str] = mapped_column(String(32))
     status: Mapped[str] = mapped_column(String(64))
+    trace_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
     result_json: Mapped[dict[str, object] | None] = mapped_column(JSON, nullable=True)
 
 

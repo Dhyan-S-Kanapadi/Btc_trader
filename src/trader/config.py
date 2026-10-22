@@ -143,6 +143,19 @@ class AgentSettings(BaseModel):
     )
 
 
+class AgentTracingSettings(BaseModel):
+    """Opt-in agent-only observation settings; defaults are operational assumptions."""
+
+    enabled: bool = False
+    project_name: str = "btc-paper-agent-live"
+    endpoint: str = "https://api.smith.langchain.com"
+    timeout_seconds: float = Field(2, gt=0, le=10)
+    max_retries: int = Field(0, ge=0, le=1)
+    payload_cap: int = Field(8192, ge=256, le=65536)
+    flush_timeout_seconds: float = Field(2, gt=0, le=10)
+    dataset_prefix: str = "btc-paper-agent-failures"
+
+
 class AgentClientSettings(BaseModel):
     """Worker-side safety bounds; defaults are conservative operational assumptions."""
 
@@ -186,6 +199,7 @@ class Settings(BaseSettings):
     agent_tools: AgentToolsSettings = Field(default_factory=AgentToolsSettings)
     guardrail: GuardrailSettings = Field(default_factory=GuardrailSettings)
     agent: AgentSettings = Field(default_factory=AgentSettings)
+    agent_tracing: AgentTracingSettings = Field(default_factory=AgentTracingSettings)
     agent_client: AgentClientSettings = Field(default_factory=AgentClientSettings)
     database_url: str | None = Field(
         default=None,

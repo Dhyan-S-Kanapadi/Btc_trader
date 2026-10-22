@@ -5,11 +5,13 @@ from __future__ import annotations
 import hashlib
 import time
 from typing import Protocol
+from uuid import UUID
 
 from pydantic import Field
 
+from trader.agent.tracing import InvestigationTrace, TraceFactory
 from trader.agent_tools import CandleSource, ToolError, ToolRegistry
-from trader.config import AgentSettings, Settings
+from trader.config import AgentSettings, AgentTracingSettings, Settings
 from trader.guardrail import GuardrailResult, ToolResultRecord, check_verdict
 from trader.models import FrozenModel, Snapshot, Verdict
 
@@ -34,6 +36,9 @@ class InvestigationResult(FrozenModel):
     tool_calls: list[dict[str, object]] = Field(default_factory=list)
     tool_results: list[ToolResultRecord] = Field(default_factory=list)
     thread_id: str
+    trace_enabled: bool = False
+    trace_id: str | None = None
+    trace_status: str = "disabled"
 
 
 def _prompt(version: str) -> tuple[str, str] | None:
@@ -53,16 +58,33 @@ def investigate(
     tool_source: CandleSource,
     model: Model | None = None,
     checkpointer: object | None = None,
+    trace_run_id: UUID | None = None,
+    trace_source: str = "cli",
+    trace_factory: TraceFactory | None = None,
+    tracing_config: AgentTracingSettings | None = None,
 ) -> InvestigationResult:
     """Run the bounded plumbing; any bad model/tool/checkpoint outcome becomes guardrailed SKIP."""
     started = time.monotonic()
     thread_id = hashlib.sha256(snapshot.model_dump_json().encode()).hexdigest()
     prompt = _prompt(config.prompt_version)
     guard_config = Settings().guardrail
+    tracing = InvestigationTrace(
+        tracing_config or Settings().agent_tracing,
+        run_id=trace_run_id,
+        inputs={"snapshot": snapshot.model_dump(mode="json")},
+        tags=[
+            f"candidate:{snapshot.idempotency_key}",
+            f"model:{config.model_id or 'unset'}",
+            f"prompt:{config.prompt_version}",
+            f"source:{trace_source}",
+        ],
+        metadata={"source": trace_source, "synthetic": snapshot.symbol.startswith("SYNTH-")},
+        factory=trace_factory,
+    )
 
     def result(status: str, raw: object, steps: int = 0) -> InvestigationResult:
         guard = check_verdict(raw, snapshot, [], guard_config)
-        return InvestigationResult(
+        output = InvestigationResult(
             verdict=guard.verdict,
             status=status,
             guardrail=guard,
@@ -72,6 +94,13 @@ def investigate(
             step_count=steps,
             latency_ms=(time.monotonic() - started) * 1000,
             thread_id=thread_id,
+            trace_enabled=tracing.run_id is not None,
+            trace_id=tracing.run_id,
+            trace_status=tracing.status,
+        )
+        tracing.finish(output.model_dump(mode="json"), {"status": status, "step_count": steps})
+        return output.model_copy(
+            update={"trace_id": tracing.run_id, "trace_status": tracing.status}
         )
 
     if prompt is None:
@@ -100,7 +129,7 @@ def investigate(
                 [ToolResultRecord.model_validate(record) for record in registry.records],
                 guard_config,
             )
-            return InvestigationResult(
+            output = InvestigationResult(
                 verdict=guard.verdict,
                 status="ok" if guard.accepted else "guardrail_rejected",
                 guardrail=guard,
@@ -113,6 +142,21 @@ def investigate(
                     ToolResultRecord.model_validate(record) for record in registry.records
                 ],
                 thread_id=thread_id,
+                trace_enabled=tracing.run_id is not None,
+                trace_id=tracing.run_id,
+                trace_status=tracing.status,
+            )
+            tracing.finish(
+                output.model_dump(mode="json"),
+                {
+                    "status": output.status,
+                    "guardrail_reason_code": guard.reason_code,
+                    "step_count": step,
+                    "tool_call_count": len(registry.records),
+                },
+            )
+            return output.model_copy(
+                update={"trace_id": tracing.run_id, "trace_status": tracing.status}
             )
         return result("step_cap", {}, config.step_cap)
     except ToolError:

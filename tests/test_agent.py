@@ -5,7 +5,7 @@ from decimal import Decimal
 
 from trader.agent import investigate
 from trader.agent_tools import InMemoryCandleSource
-from trader.config import Settings
+from trader.config import AgentTracingSettings, Settings
 from trader.models import Candle, Snapshot
 
 
@@ -64,3 +64,39 @@ def test_step_cap_fails_closed() -> None:
         _snapshot(), config=settings.agent, tool_source=InMemoryCandleSource([]), model=Loop()
     )
     assert result.status == "step_cap" and result.verdict.action == "SKIP"
+
+
+def test_trace_is_opt_in_and_uses_worker_supplied_uuid() -> None:
+    from uuid import uuid4
+
+    captured = []
+
+    class Handle:
+        def finish(self, output, metadata):
+            captured.append((output, metadata))
+
+    class Factory:
+        def start(self, **kwargs):
+            captured.append(kwargs)
+            return Handle()
+
+        def flush(self, timeout):
+            return None
+
+    run_id = uuid4()
+    result = investigate(
+        _snapshot(),
+        config=Settings().agent,
+        tool_source=InMemoryCandleSource([]),
+        model=_Model(),
+        trace_run_id=run_id,
+        trace_source="replay",
+        trace_factory=Factory(),
+        tracing_config=AgentTracingSettings(enabled=True),
+    )
+    assert (result.trace_id, result.trace_status, captured[0]["run_id"]) == (
+        str(run_id),
+        "completed",
+        run_id,
+    )
+    assert "account:" not in " ".join(captured[0]["tags"])
