@@ -372,3 +372,23 @@ restart boundary.
 The internal HTTP service uses a shared `AGENT_SERVICE_TOKEN`; it is internal-service authentication,
 not end-user authentication, and still requires network isolation. It has body, allowlist, and
 concurrency limits. This plumbing does not claim that an agent improves trading results or profitability.
+
+## Optional LangSmith tracing
+
+Tracing is agent-service observation only and defaults to off (`TRADER_AGENT_TRACING__ENABLED=false`).
+It cannot affect a verdict, risk rule, order, exit, or worker circuit breaker. The worker generates a
+UUID v4 for each agent request; the service uses it as the optional root run id and returns it only after
+a trace actually starts. Shared calls are tagged with candidate, variant, model, prompt, source and
+synthetic status—never an account ID. Linked decision rows are the way to identify all accounts served
+by one trace.
+
+The agent SDK uses bounded background batching. No decision path flushes tracing; a process may perform
+a bounded shutdown flush. Inputs, outputs, metadata and errors are scrubbed for configured secret values,
+bearer/Authorization values and common key-shaped strings, then capped at 8 KiB per field. A trace outage
+is a rate-limited warning and the investigation continues untraced. `agent_calls` and decisions stay useful
+after trace retention expires. A run-id-only dashboard URL is not documented as portable: use the project
+dashboard and filter by run id until a workspace-specific URL template is configured.
+
+Tracing shows what the agent did, not whether it was right. Before raw news or Jev text is introduced,
+the payload and licensing policy must be reviewed again. Dataset export/evaluation labels remain future
+work; this issue deliberately does not claim they exist.

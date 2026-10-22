@@ -47,6 +47,8 @@ class AgentCallResult(FrozenModel):
     circuit_open: bool = False
     input_tokens: int | None = None
     output_tokens: int | None = None
+    trace_id: str | None = None
+    trace_status: str = "disabled"
 
 
 def _skip(
@@ -95,6 +97,7 @@ class AgentClient:
         account_context: Mapping[str, object],
     ) -> AgentCallResult:
         started, call_id = time.monotonic(), str(uuid.uuid4())
+        trace_run_id = str(uuid.uuid4())
         if gate.killed:
             return _skip(
                 "agent_killed", target=self.target.name, started=started, gate=gate, call_id=call_id
@@ -118,7 +121,7 @@ class AgentClient:
         if self.cache is not None and (cached := self.cache.get(request_key)) is not None:
             return cached.model_copy(update={"cache_hit": True})
         request = {
-            "schema_version": 1,
+            "schema_version": 2,
             "request_id": call_id,
             "candidate_key": snapshot.idempotency_key,
             "snapshot": snapshot.model_dump(mode="json"),
@@ -127,6 +130,7 @@ class AgentClient:
             "model_id": gate.model_version,
             "prompt_version": gate.prompt_version,
             "account_context": dict(account_context),
+            "trace_run_id": trace_run_id,
         }
         try:
             response = self.target.investigate(request, self.deadline_seconds)
@@ -214,6 +218,18 @@ class AgentClient:
         status = str(response.get("status", "ok")) if guard.accepted else "agent_guardrail_rejected"
         if self.breaker is not None:
             self.breaker.record_success()
+        trace = response.get("trace")
+        trace_id = None
+        trace_status = "disabled"
+        if isinstance(trace, Mapping):
+            trace_status = str(trace.get("status", "disabled"))
+            candidate_trace_id = trace.get("run_id")
+            if trace.get("enabled") is True and candidate_trace_id == trace_run_id:
+                try:
+                    uuid.UUID(str(candidate_trace_id), version=4)
+                    trace_id = str(candidate_trace_id)
+                except (TypeError, ValueError):
+                    trace_status = "invalid"
         result = AgentCallResult(
             verdict=guard.verdict,
             status=status,
@@ -228,6 +244,8 @@ class AgentClient:
             guardrail_version=guard.guardrail_version,
             guardrail_reason_code=guard.reason_code,
             call_id=call_id,
+            trace_id=trace_id,
+            trace_status=trace_status,
         )
         if self.cache is not None and result.status not in {
             "agent_timeout",

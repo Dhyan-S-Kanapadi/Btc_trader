@@ -6,6 +6,7 @@ import asyncio
 import hmac
 from collections.abc import Callable
 from typing import Any
+from uuid import UUID
 
 from fastapi import FastAPI, HTTPException, Request
 
@@ -47,13 +48,28 @@ def create_agent_service(
             raise HTTPException(status_code=422, detail="invalid JSON") from error
         if not isinstance(payload, dict):
             raise HTTPException(status_code=422, detail="request must be an object")
+        if payload.get("schema_version", 1) != 2:
+            raise HTTPException(status_code=422, detail="unsupported agent request schema_version")
+        trace_run_id = payload.get("trace_run_id")
+        if trace_run_id is not None:
+            try:
+                UUID(str(trace_run_id), version=4)
+            except (TypeError, ValueError):
+                payload.pop("trace_run_id", None)
         if model_allowlist and payload.get("model_id") not in model_allowlist:
             raise HTTPException(status_code=422, detail="model is not allowed")
         if semaphore.locked():
             raise HTTPException(status_code=429, detail="agent service busy")
         async with semaphore:
             try:
-                return await asyncio.to_thread(runner, payload)
+                response = await asyncio.to_thread(runner, payload)
+                if not isinstance(response, dict):
+                    raise ValueError("investigator response must be an object")
+                response.setdefault("schema_version", 2)
+                response.setdefault(
+                    "trace", {"enabled": False, "run_id": None, "status": "disabled"}
+                )
+                return response
             except Exception:
                 raise HTTPException(status_code=503, detail="investigator unavailable") from None
 

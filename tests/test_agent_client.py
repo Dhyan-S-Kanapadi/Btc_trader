@@ -27,7 +27,7 @@ class _Target:
 
     def investigate(self, request, timeout_seconds):
         self.calls += 1
-        return {
+        response = {
             "request_id": request["request_id"],
             "snapshot_digest": request["snapshot_digest"],
             "model_id": request["model_id"],
@@ -39,6 +39,13 @@ class _Target:
                 "cited_evidence": {"snapshot.symbol": "BTCUSDT"},
             },
         }
+        if "trace_run_id" in request:
+            response["trace"] = {
+                "enabled": True,
+                "run_id": request["trace_run_id"],
+                "status": "completed",
+            }
+        return response
 
 
 def test_off_gate_makes_no_target_call() -> None:
@@ -85,3 +92,4 @@ def test_completed_result_is_reused_for_the_same_request_key() -> None:
     first = client.investigate(_snapshot(), gate=gate, variant="base", account_context={})
     second = client.investigate(_snapshot(), gate=gate, variant="base", account_context={})
     assert (first.cache_hit, second.cache_hit, target.calls) == (False, True, 1)
+    assert first.trace_id is not None and second.trace_id == first.trace_id

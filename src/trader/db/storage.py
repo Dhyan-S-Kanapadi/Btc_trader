@@ -595,6 +595,11 @@ class PostgresStorage:
                     snapshot_digest=str(payload["snapshot_digest"]),
                     target=str(payload["target"]),
                     status=str(payload["status"]),
+                    trace_id=(
+                        str(payload["trace_id"])
+                        if payload.get("trace_id") is not None
+                        else None
+                    ),
                     result_json=payload,
                 )
                 session.add(row)
