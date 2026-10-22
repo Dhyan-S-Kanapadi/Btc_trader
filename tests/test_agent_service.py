@@ -39,9 +39,12 @@ def test_service_refuses_start_without_token() -> None:
 def test_service_rejects_unknown_contract_version_and_ignores_bad_trace_id() -> None:
     client = TestClient(_app())
     headers = {"Authorization": "Bearer secret"}
-    assert client.post(
-        "/v1/investigate", headers=headers, json={"schema_version": 99, "model_id": "safe"}
-    ).status_code == 422
+    assert (
+        client.post(
+            "/v1/investigate", headers=headers, json={"schema_version": 99, "model_id": "safe"}
+        ).status_code
+        == 422
+    )
     response = client.post(
         "/v1/investigate",
         headers=headers,
