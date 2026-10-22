@@ -179,6 +179,17 @@ failure. This spike does **not** test whether news or Jev predicts BTC returns.
 - **News for replay:** **no**.
 - **Account C forward-test only:** **yes**.
 
+## E. Controlled forward-test update (2026-10-22)
+
+The operator accepted the narrow TypeSafe/Vercel data-sharing route recorded above and
+Issue #26 provides the bounded sensor implementation. Account C may therefore be
+configured as an `agent_veto` **forward-test-only** variant after Issue #27, but only
+when the global agent and Jev switches, C's account agent and Jev switches, and the
+environment-only Jev configuration are all enabled. The defaults remain off. This
+supersedes the earlier operational instruction to leave C on `skip_all`; it does not
+supersede the no-historical-replay verdict. C's replay evidence remains null with
+`coverage_not_ok`, and neither BLS schedules nor Jev output make a BTC prediction.
+
 Suggested backlog edits for review, not applied:
 
 1. **#25:** Define a BLS-only schedule adapter first; capture UTC receipt time,

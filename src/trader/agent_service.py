@@ -10,6 +10,62 @@ from uuid import UUID
 
 from fastapi import FastAPI, HTTPException, Request
 
+from trader.agent import investigate
+from trader.agent.investigator import Model
+from trader.agent_tools import CandleSource, MemorySource
+from trader.config import Settings
+from trader.models import Snapshot
+
+
+def make_investigator_runner(
+    settings: Settings,
+    tool_source: CandleSource,
+    model: Model,
+    memory_source: MemorySource | None = None,
+) -> Callable[[dict[str, Any]], dict[str, Any]]:
+    """Bind D's reader-only memory source inside the agent service, never the worker."""
+
+    def runner(payload: dict[str, Any]) -> dict[str, Any]:
+        snapshot = Snapshot.model_validate(payload["snapshot"])
+        variant = str(payload.get("variant", "base"))
+        if variant not in {"base", "jev", "memory"}:
+            raise ValueError("unknown variant")
+        trace_run_id = UUID(str(payload["trace_run_id"])) if payload.get("trace_run_id") else None
+        result = investigate(
+            snapshot,
+            config=settings.agent.model_copy(
+                update={
+                    "model_id": payload.get("model_id"),
+                    "prompt_version": payload.get("prompt_version", settings.agent.prompt_version),
+                }
+            ),
+            tool_source=tool_source,
+            model=model,
+            trace_run_id=trace_run_id,
+            memory_source=(
+                memory_source if variant == "memory" and settings.agent_memory.enabled else None
+            ),
+            variant=variant,
+            runtime_settings=settings,
+        )
+        return {
+            "request_id": payload["request_id"],
+            "snapshot_digest": payload["snapshot_digest"],
+            "model_id": payload.get("model_id"),
+            "prompt_version": payload.get("prompt_version", settings.agent.prompt_version),
+            "prompt_hash": result.prompt_hash,
+            "status": result.status,
+            "verdict": result.verdict.model_dump(mode="json"),
+            "tool_results": [item.model_dump(mode="json") for item in result.tool_results],
+            "trace": {
+                "enabled": result.trace_enabled,
+                "run_id": str(result.trace_id) if result.trace_id else None,
+                "status": result.trace_status,
+            },
+        }
+
+    return runner
+
 
 def create_agent_service(
     *,

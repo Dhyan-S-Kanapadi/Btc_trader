@@ -27,6 +27,14 @@ class Clock(Protocol):
     def sleep_until(self, target: datetime) -> None: ...
 
 
+class EvidenceProvider(Protocol):
+    """Optional outer boundary; keeps Jev and news out of the worker module."""
+
+    def enrichers(self, storage, control: ControlConfig, accounts) -> dict[str, object]: ...
+
+    def close(self) -> None: ...
+
+
 class RealClock:
     """Production clock; worker logic itself never calls datetime.now or time.sleep."""
 
@@ -79,7 +87,14 @@ class CycleResult:
     agent_gates: dict[str, str]
 
 
-def run_cycle(storage: PostgresStorage, accounts, settings: Settings, now: datetime) -> CycleResult:
+def run_cycle(
+    storage: PostgresStorage,
+    accounts,
+    settings: Settings,
+    now: datetime,
+    agent_client=None,
+    evidence_provider: EvidenceProvider | None = None,
+) -> CycleResult:
     """Fetch closed public candles, then route unpersisted candles in chronological order."""
 
     try:
@@ -139,6 +154,26 @@ def run_cycle(storage: PostgresStorage, accounts, settings: Settings, now: datet
             )
             for account_id, result in phase_one.items():
                 accounts[account_id] = (result.state, accounts[account_id][1])
+        enrichers = {}
+        if evidence_provider is not None:
+            try:
+                enrichers = evidence_provider.enrichers(storage, control, accounts)
+            except Exception:
+                logging.getLogger("trader.worker").exception("variant evidence unavailable")
+        policies = None
+        if agent_client is not None:
+            from trader.agent_client import AgentVetoPolicy
+
+            policies = {
+                account_id: AgentVetoPolicy(
+                    agent_client,
+                    resolve_agent_gate(control, account_id),
+                    account.variant,
+                    enrichers.get(account_id),
+                )
+                for account_id, (_state, account) in accounts.items()
+                if account_id != "A" and account.policy_name == "agent_veto"
+            }
         results = route_candle_phase_two(
             accounts,
             history,
@@ -148,6 +183,7 @@ def run_cycle(storage: PostgresStorage, accounts, settings: Settings, now: datet
             freshness.stale,
             allow_entries=not catchup,
             control=control,
+            policies=policies,
         )
         storage.persist_routed_candle(
             settings.strategy.interval,
@@ -179,7 +215,11 @@ def run_cycle(storage: PostgresStorage, accounts, settings: Settings, now: datet
     )
 
 
-def run_worker(settings: Settings, clock: Clock | None = None) -> int:
+def run_worker(
+    settings: Settings,
+    clock: Clock | None = None,
+    evidence_provider: EvidenceProvider | None = None,
+) -> int:
     """Run until SIGINT/SIGTERM or lock loss; never contacts authenticated exchange endpoints."""
 
     if settings.database_url is None:
@@ -187,6 +227,30 @@ def run_worker(settings: Settings, clock: Clock | None = None) -> int:
     configure_logging()
     logger = logging.getLogger("trader.worker")
     storage = PostgresStorage(settings.database_url)
+    from trader.agent_client import (
+        AgentClient,
+        AgentCoreTarget,
+        HttpTarget,
+        InMemoryResultCache,
+        LocalTarget,
+    )
+
+    target = (
+        HttpTarget(
+            settings.agent_client.service_url or "",
+            settings.agent_client.service_token,
+            settings.agent_client.connect_timeout_seconds,
+        )
+        if settings.agent_client.target == "http"
+        else AgentCoreTarget(settings.agent_client.service_url or "")
+        if settings.agent_client.target == "agentcore"
+        else LocalTarget()
+    )
+    agent_client = AgentClient(
+        target,
+        deadline_seconds=settings.agent_client.total_deadline_seconds,
+        cache=InMemoryResultCache(),
+    )
     clock = clock or RealClock()
     lock = WorkerLock(storage, settings.worker.lock_key)
     if not lock.acquire():
@@ -246,7 +310,7 @@ def run_worker(settings: Settings, clock: Clock | None = None) -> int:
                     storage, settings.strategy.symbol, settings.strategy.interval, start, now, now
                 )
                 started = clock.now()
-                cycle = run_cycle(storage, accounts, settings, now)
+                cycle = run_cycle(storage, accounts, settings, now, agent_client, evidence_provider)
                 logger.info(
                     "worker heartbeat",
                     extra={
@@ -276,6 +340,8 @@ def run_worker(settings: Settings, clock: Clock | None = None) -> int:
         if ingestor is not None:
             ingestor.close()
         lock.close()
+        if evidence_provider is not None:
+            evidence_provider.close()
     if exit_code == 0:
         logger.info("worker shutdown")
     return exit_code

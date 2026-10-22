@@ -147,6 +147,27 @@ def test_unknown_account_policy_fails_fast() -> None:
         policy_for("not-a-policy", _config())
 
 
+def test_variant_is_database_config_and_unknown_value_fails_fast() -> None:
+    assert (
+        AccountConfig(
+            account_id="D",
+            label="D",
+            policy_name="agent_veto",
+            starting_equity=Decimal("1"),
+            variant="memory",
+        ).variant
+        == "memory"
+    )
+    with pytest.raises(ValueError):
+        AccountConfig(
+            account_id="D",
+            label="D",
+            policy_name="agent_veto",
+            starting_equity=Decimal("1"),
+            variant="unknown",
+        )
+
+
 def test_router_completes_every_phase_one_before_a_policy_runs(monkeypatch) -> None:
     """The worker can persist all phase-one results before a future agent policy call."""
 

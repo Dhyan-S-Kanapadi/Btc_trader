@@ -167,11 +167,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         if settings.database_url is None:
             parser.error("DATABASE_URL is required for trader seed-accounts")
         storage = PostgresStorage(settings.database_url)
-        for account_id, policy_name in (
-            ("A", "take_all"),
-            ("B", "skip_all"),
-            ("C", "skip_all"),
-            ("D", "skip_all"),
+        for account_id, policy_name, variant in (
+            ("A", "take_all", "base"),
+            ("B", "agent_veto", "base"),
+            ("C", "agent_veto", "jev"),
+            ("D", "agent_veto", "memory"),
         ):
             storage.seed_account(
                 account_id,
@@ -180,11 +180,16 @@ def main(argv: Sequence[str] | None = None) -> int:
                     "account_id": account_id,
                     "label": f"Paper account {account_id}",
                     "policy_name": policy_name,
+                    "variant": variant,
                     "starting_equity": str(settings.risk.starting_equity),
                     "enabled": True,
                     "risk": settings.risk.model_dump(mode="json"),
                 },
             )
+            if account_id in {"B", "C", "D"}:
+                storage.promote_placeholder_policy(
+                    account_id, policy_name, variant, getpass.getuser()
+                )
         configure_logging().info("paper accounts seeded", extra={"command": "seed-accounts"})
         return 0
 
@@ -210,7 +215,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             if args.control_command == "unkill"
             else args.value
         )
-        bool_fields = {"agent_enabled", "kill_switch", "shadow"}
+        bool_fields = {"agent_enabled", "kill_switch", "shadow", "jev_enabled", "memory_enabled"}
         decimal_fields = {"per_candidate_cap", "per_day_cap"}
         try:
             if field in bool_fields:
@@ -484,9 +489,11 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if args.command == "worker":
         from trader.config import Settings
+        from trader.variant_runtime import VariantEvidenceProvider
         from trader.worker import run_worker
 
-        return run_worker(Settings())
+        settings = Settings()
+        return run_worker(settings, evidence_provider=VariantEvidenceProvider(settings))
 
     if args.command == "api":
         from trader.api import run_api

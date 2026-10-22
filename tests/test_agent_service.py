@@ -3,7 +3,10 @@
 import pytest
 from fastapi.testclient import TestClient
 
-from trader.agent_service import create_agent_service
+from trader.agent_service import create_agent_service, make_investigator_runner
+from trader.agent_tools import InMemoryCandleSource
+from trader.config import Settings
+from trader.models import Snapshot
 
 
 def _app():
@@ -51,3 +54,44 @@ def test_service_rejects_unknown_contract_version_and_ignores_bad_trace_id() -> 
         json={"schema_version": 2, "model_id": "safe", "trace_run_id": "not-a-uuid"},
     )
     assert response.json()["trace"] == {"enabled": False, "run_id": None, "status": "disabled"}
+
+
+def test_service_binds_memory_only_for_the_memory_variant() -> None:
+    seen = []
+
+    class Model:
+        def invoke(self, _prompt, snapshot, tools):
+            seen.append(set(tools))
+            return {
+                "action": "SKIP",
+                "reasons": ["evidence is insufficient"],
+                "cited_evidence": {"snapshot.symbol": snapshot.symbol},
+            }
+
+    class Memory:
+        def search(self, **_kwargs):
+            return []
+
+    settings = Settings().model_copy(
+        update={"agent_memory": Settings().agent_memory.model_copy(update={"enabled": True})}
+    )
+    runner = make_investigator_runner(settings, InMemoryCandleSource([]), Model(), Memory())
+    snapshot = Snapshot(
+        idempotency_key="candidate",
+        symbol="BTCUSDT",
+        signal_time="2026-01-01T00:00:00Z",
+        reference_price=100,
+        atr=1,
+        breakout_level=99,
+    )
+    common = {
+        "request_id": "request",
+        "snapshot": snapshot.model_dump(mode="json"),
+        "snapshot_digest": "digest",
+        "model_id": "pinned",
+        "prompt_version": "investigator_v1",
+    }
+    runner({**common, "variant": "base"})
+    runner({**common, "variant": "memory"})
+    assert "similar_past_setups" not in seen[0]
+    assert "similar_past_setups" in seen[1]

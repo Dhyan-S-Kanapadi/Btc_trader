@@ -9,6 +9,7 @@ from trader.control import (
     GatedPolicy,
     GlobalControl,
     resolve_agent_gate,
+    resolve_evidence_gate,
 )
 from trader.models import Candidate, Snapshot
 from trader.replay import PolicyDecision, TakeAllPolicy
@@ -35,6 +36,26 @@ def test_resolver_is_fail_closed_and_kill_precedes_enablement() -> None:
     )
     assert resolve_agent_gate(control, "B").killed
     assert resolve_agent_gate(control, "C").mode == "off"
+
+
+def test_evidence_switches_default_off() -> None:
+    control = ControlConfig()
+    assert not control.global_control.jev_enabled
+    assert not AccountControl(account_id="D").memory_enabled
+
+
+def test_evidence_requires_a_live_or_shadow_agent_and_the_matching_variant() -> None:
+    control = ControlConfig(
+        global_control=GlobalControl(agent_enabled=True, jev_enabled=True),
+        accounts={
+            "C": AccountControl(account_id="C", agent_enabled=True, jev_enabled=True),
+            "D": AccountControl(account_id="D", agent_enabled=True, memory_enabled=True),
+        },
+    )
+    assert resolve_evidence_gate(control, "C", "jev").jev
+    assert not resolve_evidence_gate(control, "C", "base").jev
+    assert resolve_evidence_gate(control, "D", "memory").memory
+    assert not resolve_evidence_gate(ControlConfig(), "C", "jev").jev
 
 
 def test_shadow_records_inner_verdict_but_uses_skip_fallback() -> None:

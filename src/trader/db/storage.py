@@ -440,6 +440,8 @@ class PostgresStorage:
                     agent_enabled=row.agent_enabled,
                     shadow=row.shadow,
                     kill_switch=row.kill_switch,
+                    memory_enabled=row.memory_enabled,
+                    jev_enabled=row.jev_enabled,
                     per_candidate_cap=row.per_candidate_cap,
                     per_day_cap=row.per_day_cap,
                     fallback_policy=row.fallback_policy,
@@ -450,6 +452,7 @@ class PostgresStorage:
                 global_control=GlobalControl(
                     agent_enabled=global_row.agent_enabled,
                     kill_switch=global_row.kill_switch,
+                    jev_enabled=global_row.jev_enabled,
                     model_version=global_row.model_version,
                     prompt_version=global_row.prompt_version,
                     per_candidate_cap=global_row.per_candidate_cap,
@@ -464,6 +467,7 @@ class PostgresStorage:
         global_fields = {
             "agent_enabled",
             "kill_switch",
+            "jev_enabled",
             "model_version",
             "prompt_version",
             "per_candidate_cap",
@@ -473,6 +477,8 @@ class PostgresStorage:
             "agent_enabled",
             "shadow",
             "kill_switch",
+            "memory_enabled",
+            "jev_enabled",
             "per_candidate_cap",
             "per_day_cap",
             "fallback_policy",
@@ -889,6 +895,30 @@ class PostgresStorage:
                 is None
             ):
                 session.add(ConfigRow(account_id=account_id, config=config))
+
+    def promote_placeholder_policy(
+        self, account_id: str, policy_name: str, variant: str, actor: str
+    ) -> bool:
+        """Only migrate the #27 placeholder; preserve every operator customization."""
+        with self._sessions.begin() as session:
+            row = session.scalar(select(ConfigRow).where(ConfigRow.account_id == account_id))
+            if row is None or row.config.get("policy_name") != "skip_all":
+                return False
+            row.config = {**row.config, "policy_name": policy_name, "variant": variant}
+            session.add(
+                AgentControlAuditRow(
+                    actor=actor,
+                    scope=account_id,
+                    field="policy_name",
+                    old_value={"policy_name": "skip_all"},
+                    new_value={
+                        "policy_name": policy_name,
+                        "variant": variant,
+                        "reason": "issue_27",
+                    },
+                )
+            )
+            return True
 
     def load_account_config(self, account_id: str) -> dict[str, object]:
         """Load non-secret account config or fail before routing begins."""

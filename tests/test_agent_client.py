@@ -3,9 +3,9 @@
 from datetime import UTC, datetime
 from decimal import Decimal
 
-from trader.agent_client import AgentClient, CircuitBreaker, InMemoryResultCache
+from trader.agent_client import AgentClient, AgentVetoPolicy, CircuitBreaker, InMemoryResultCache
 from trader.control import AgentGate
-from trader.models import Snapshot
+from trader.models import Candidate, Snapshot
 
 
 def _snapshot() -> Snapshot:
@@ -24,9 +24,11 @@ class _Target:
 
     def __init__(self) -> None:
         self.calls = 0
+        self.last_request = None
 
     def investigate(self, request, timeout_seconds):
         self.calls += 1
+        self.last_request = request
         response = {
             "request_id": request["request_id"],
             "snapshot_digest": request["snapshot_digest"],
@@ -93,3 +95,30 @@ def test_completed_result_is_reused_for_the_same_request_key() -> None:
     second = client.investigate(_snapshot(), gate=gate, variant="base", account_context={})
     assert (first.cache_hit, second.cache_hit, target.calls) == (False, True, 1)
     assert first.trace_id is not None and second.trace_id == first.trace_id
+
+
+def test_jev_variant_enriches_only_its_own_request_snapshot() -> None:
+    target = _Target()
+    policy = AgentVetoPolicy(
+        AgentClient(target),
+        AgentGate(mode="live", model_version="test", prompt_version="v1"),
+        "jev",
+        lambda snapshot: snapshot.model_copy(
+            update={"schema_version": 2, "jev_status": "coverage_not_ok"}
+        ),
+    )
+    snapshot = _snapshot()
+    policy.decide(
+        snapshot,
+        Candidate(
+            symbol="BTCUSDT",
+            bar_index=1,
+            signal_time=snapshot.signal_time,
+            reference_price=Decimal("100"),
+            atr=Decimal("1"),
+            breakout_level=Decimal("99"),
+            idempotency_key="x",
+        ),
+    )
+    assert target.calls == 1
+    assert target.last_request["snapshot"]["jev_status"] == "coverage_not_ok"

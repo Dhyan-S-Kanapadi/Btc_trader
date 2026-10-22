@@ -231,7 +231,13 @@ pending-position restart serialization when live-worker recovery is introduced.
 Issue #11 adds four independent paper accounts, `A` through `D`, sharing each closed candle,
 candidate, and evidence snapshot while keeping cash, positions, risk limits, and decisions separate.
 `trader seed-accounts` creates the idempotent local defaults: `A` uses `take_all`; `B`, `C`, and
-`D` use `skip_all` with the exact reason `agent not wired yet (#27)`. Each account has an editable,
+`D` use agent-veto account configurations after Issue #27. B is `base`, C is `jev` and is strictly
+forward-test-only, and D is `memory`; unknown variants fail fast when the database config is loaded.
+`trader seed-accounts` promotes only an unchanged `skip_all` placeholder and appends an audit record,
+never overwriting an operator-selected policy. Safe defaults remain agent off and shadow on, so this
+plumbing does not make a model, Jev, or memory call by itself. C additionally requires global and
+per-account Jev controls; no historical-news replay is enabled or implied.
+Each account has an editable,
 non-secret `configs` JSON document containing `account_id`, `label`, `policy_name`,
 `starting_equity`, and `enabled`; an unknown policy or malformed configuration fails before replay.
 
@@ -451,5 +457,6 @@ Run `sql/agent_memory_init.sql` once as the memory database owner. The agent rec
 `AGENT_MEMORY_DATABASE_URL` (the reader credential); `trader memory init` and `trader memory sync` require
 the separate `AGENT_MEMORY_WRITE_DATABASE_URL`. The memory tool appears only when memory is enabled and the
 request variant is `memory`. It returns historical cases and distances, not probabilities or trading advice.
-This proves only that the retrieval plumbing is time-gated; it does not prove memory improves outcomes. Live
-per-cycle sync and Account D wiring remain Issue #27.
+The agent-service composition uses `make_investigator_runner(..., memory_source=PostgresMemorySource(...))`;
+that reader is passed only for D's `memory` request variant, never to the worker or B/C. This proves only that
+the retrieval plumbing is time-gated; it does not prove memory improves outcomes.
