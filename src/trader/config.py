@@ -143,6 +143,20 @@ class AgentSettings(BaseModel):
     )
 
 
+class AgentClientSettings(BaseModel):
+    """Worker-side safety bounds; defaults are conservative operational assumptions."""
+
+    target: str = Field("local", pattern="^(local|http|agentcore)$")
+    service_url: str | None = None
+    service_token: str | None = Field(default=None, validation_alias="AGENT_SERVICE_TOKEN")
+    total_deadline_seconds: float = Field(10, gt=0, le=60)
+    connect_timeout_seconds: float = Field(2, gt=0, le=30)
+    max_retries: int = Field(1, ge=0, le=1)
+    breaker_failure_threshold: int = Field(3, ge=1)
+    breaker_cooldown_seconds: float = Field(300, gt=0)
+    cycle_budget_seconds: float = Field(20, gt=0)
+
+
 class Settings(BaseSettings):
     """All configuration sourced from environment variables or explicit test inputs."""
 
@@ -172,6 +186,7 @@ class Settings(BaseSettings):
     agent_tools: AgentToolsSettings = Field(default_factory=AgentToolsSettings)
     guardrail: GuardrailSettings = Field(default_factory=GuardrailSettings)
     agent: AgentSettings = Field(default_factory=AgentSettings)
+    agent_client: AgentClientSettings = Field(default_factory=AgentClientSettings)
     database_url: str | None = Field(
         default=None,
         validation_alias="DATABASE_URL",

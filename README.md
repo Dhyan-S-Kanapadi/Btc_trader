@@ -355,3 +355,20 @@ be `InMemoryCandleSource` for local deterministic use or `HttpCandleSource` for 
 API. Calls log tool name, bound arguments, status, latency, fetched count, data-through, and an output
 digest without raw candle payloads. The API has no authentication today; #31/#34 must decide its
 deployment boundary before exposing it beyond a trusted network.
+
+## Agent client safety boundary
+
+Issue #21 keeps the investigator outside the stop/exit path. Each candle has a durable phase one
+(pending fills, exits, equity marks, and day rollover) before phase two evaluates a candidate policy.
+The worker persists phase one for every enabled account before a policy can invoke an agent; a restart
+resumes phase two rather than replaying an exit.
+
+The worker-side client supports local development, internal HTTP, and optional AgentCore targets. It
+fails closed to `SKIP`: killed/off gates make no request, and unavailable targets, timeouts, response
+mismatches, and invalid output cannot approve an entry. Returned verdicts are rechecked by the worker
+guardrail. Its in-memory circuit breaker resets on restart; the durable request cache remains the
+restart boundary.
+
+The internal HTTP service uses a shared `AGENT_SERVICE_TOKEN`; it is internal-service authentication,
+not end-user authentication, and still requires network isolation. It has body, allowlist, and
+concurrency limits. This plumbing does not claim that an agent improves trading results or profitability.
