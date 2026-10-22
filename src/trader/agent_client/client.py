@@ -14,6 +14,7 @@ from trader.guardrail import GUARDRAIL_VERSION, ToolResultRecord, check_verdict
 from trader.models import FrozenModel, Snapshot, Verdict
 
 from .breaker import CircuitBreaker
+from .cache import ResultCache
 
 
 class AgentUnavailable(RuntimeError):
@@ -78,10 +79,12 @@ class AgentClient:
         *,
         deadline_seconds: float = 10.0,
         breaker: CircuitBreaker | None = None,
+        cache: ResultCache | None = None,
     ) -> None:
         self.target = target
         self.deadline_seconds = deadline_seconds
         self.breaker = breaker
+        self.cache = cache
 
     def investigate(
         self,
@@ -109,6 +112,11 @@ class AgentClient:
                 call_id=call_id,
             ).model_copy(update={"circuit_open": True})
         digest = hashlib.sha256(snapshot.model_dump_json().encode()).hexdigest()
+        request_key = hashlib.sha256(
+            f"{digest}:{variant}:{gate.model_version}:{gate.prompt_version}".encode()
+        ).hexdigest()
+        if self.cache is not None and (cached := self.cache.get(request_key)) is not None:
+            return cached.model_copy(update={"cache_hit": True})
         request = {
             "schema_version": 1,
             "request_id": call_id,
@@ -206,7 +214,7 @@ class AgentClient:
         status = str(response.get("status", "ok")) if guard.accepted else "agent_guardrail_rejected"
         if self.breaker is not None:
             self.breaker.record_success()
-        return AgentCallResult(
+        result = AgentCallResult(
             verdict=guard.verdict,
             status=status,
             attempts=1,
@@ -221,3 +229,10 @@ class AgentClient:
             guardrail_reason_code=guard.reason_code,
             call_id=call_id,
         )
+        if self.cache is not None and result.status not in {
+            "agent_timeout",
+            "agent_transport_error",
+            "agent_circuit_open",
+        }:
+            self.cache.put(request_key, result)
+        return result

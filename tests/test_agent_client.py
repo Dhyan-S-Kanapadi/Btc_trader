@@ -3,7 +3,7 @@
 from datetime import UTC, datetime
 from decimal import Decimal
 
-from trader.agent_client import AgentClient, CircuitBreaker
+from trader.agent_client import AgentClient, CircuitBreaker, InMemoryResultCache
 from trader.control import AgentGate
 from trader.models import Snapshot
 
@@ -76,3 +76,12 @@ def test_circuit_open_prevents_a_second_target_call() -> None:
     )
     second = client.investigate(_snapshot(), gate=gate, variant="base", account_context={})
     assert (second.status, second.circuit_open, target.calls) == ("agent_circuit_open", True, 1)
+
+
+def test_completed_result_is_reused_for_the_same_request_key() -> None:
+    target = _Target()
+    client = AgentClient(target, cache=InMemoryResultCache())
+    gate = AgentGate(mode="live", model_version="test", prompt_version="v1")
+    first = client.investigate(_snapshot(), gate=gate, variant="base", account_context={})
+    second = client.investigate(_snapshot(), gate=gate, variant="base", account_context={})
+    assert (first.cache_hit, second.cache_hit, target.calls) == (False, True, 1)
