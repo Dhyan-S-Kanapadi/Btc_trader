@@ -52,6 +52,7 @@ def trade_from_exit(position: Position, fill: Fill, reason: str) -> Trade:
 
     return Trade(
         account_id=position.account_id,
+        candidate_idempotency_key=position.candidate_idempotency_key,
         symbol=position.symbol,
         qty=position.qty,
         entry_price=position.entry_price,

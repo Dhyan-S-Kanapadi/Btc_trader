@@ -51,6 +51,22 @@ def build_parser() -> argparse.ArgumentParser:
     report.add_argument("--output-dir", type=Path, default=Path("report-output"))
     subcommands.add_parser("worker", help=f"Reserved for issue #{_COMMAND_ISSUES['worker']}.")
     subcommands.add_parser("api", help="Run the read-only paper-trading HTTP API.")
+    memory = subcommands.add_parser("memory", help="Manage separate, agent-only episodic memory.")
+    memory_subcommands = memory.add_subparsers(dest="memory_command", required=True)
+    memory_subcommands.add_parser("init", help="Initialize pgvector memory schema and roles.")
+    sync_memory = memory_subcommands.add_parser(
+        "sync", help="Copy resolved Account A outcomes to memory."
+    )
+    sync_memory.add_argument("--namespace", default=None)
+    sync_memory.add_argument("--outcome-account", default="A")
+    sync_memory.add_argument("--synthetic", action="store_true")
+    sync_memory.add_argument("--since", help="Inclusive UTC ISO-8601 exit time.")
+    search_memory = memory_subcommands.add_parser(
+        "search", help="Inspect time-gated memory retrieval."
+    )
+    search_memory.add_argument("--as-of", required=True, help="UTC ISO-8601 candidate time.")
+    search_memory.add_argument("--snapshot", type=Path, required=True, help="Snapshot JSON file.")
+    search_memory.add_argument("--k", type=int, help="Number of exact nearest episodes.")
     control = subcommands.add_parser(
         "control", help="Inspect or change fail-closed agent controls."
     )
@@ -199,6 +215,109 @@ def main(argv: Sequence[str] | None = None) -> int:
             parser.error(f"invalid control value: {error}")
         storage.seed_agent_controls()
         storage.set_agent_control(args.scope, field, value, args.actor)
+        return 0
+
+    if args.command == "memory":
+        from trader.config import Settings
+        from trader.memory import embed_snapshot, embedding_version, record_episode
+        from trader.memory.postgres import PostgresMemorySource, PostgresMemoryWriter
+        from trader.models import Candidate, Snapshot, Trade
+
+        settings = Settings()
+        read_url = settings.agent_memory.database_url
+        if args.memory_command == "init":
+            import psycopg
+
+            write_url = settings.agent_memory.write_database_url
+            if write_url is None:
+                parser.error("AGENT_MEMORY_WRITE_DATABASE_URL is required for trader memory init")
+
+            # The source checkout is the supported local command target; deployments run this SQL once.
+            path = Path("sql/agent_memory_init.sql")
+            if not path.is_file():
+                parser.error("sql/agent_memory_init.sql is required from the repository root")
+            with psycopg.connect(
+                write_url.replace("postgresql+psycopg://", "postgresql://", 1)
+            ) as con:
+                con.execute(path.read_text(encoding="utf-8"))
+            return 0
+        if args.memory_command == "sync":
+            import psycopg
+            from psycopg.rows import dict_row
+
+            write_url = settings.agent_memory.write_database_url
+            if write_url is None:
+                parser.error("AGENT_MEMORY_WRITE_DATABASE_URL is required for trader memory sync")
+            if settings.database_url_readonly is None:
+                parser.error("DATABASE_URL_READONLY is required for trader memory sync")
+            since = datetime.fromisoformat(args.since).astimezone(UTC) if args.since else None
+            query = """
+                SELECT c.symbol, c.bar_index, c.signal_time, c.reference_price, c.atr,
+                       c.breakout_level, c.idempotency_key, s.snapshot,
+                       t.account_id, t.qty, t.entry_price, t.entry_time, t.stop_price,
+                       t.initial_stop_price, t.exit_price, t.exit_time, t.fees, t.reason,
+                       exit_candle.open_time + interval '1 hour' AS known_at
+                FROM trades t
+                JOIN candidates c ON c.idempotency_key = t.candidate_idempotency_key
+                JOIN snapshots s ON s.candidate_id = c.id
+                JOIN candles exit_candle ON exit_candle.symbol = t.symbol
+                    AND exit_candle.interval = '1h' AND exit_candle.open_time = t.exit_time
+                WHERE t.account_id = %s AND t.candidate_idempotency_key IS NOT NULL
+                  AND (%s::timestamptz IS NULL OR t.exit_time >= %s::timestamptz)
+                ORDER BY known_at, t.id
+            """
+            readonly_url = settings.database_url_readonly.replace(
+                "postgresql+psycopg://", "postgresql://", 1
+            )
+            with psycopg.connect(readonly_url, row_factory=dict_row) as connection:
+                rows = connection.execute(query, (args.outcome_account, since, since)).fetchall()
+            namespace = args.namespace or settings.agent_memory.namespace
+            episodes = []
+            for row in rows:
+                candidate = Candidate.model_validate(
+                    {key: row[key] for key in Candidate.model_fields}
+                )
+                snapshot = Snapshot.model_validate(row["snapshot"])
+                trade = Trade.model_validate(
+                    {key: row[key] for key in Trade.model_fields if key in row}
+                )
+                episode = record_episode(
+                    candidate,
+                    snapshot,
+                    trade,
+                    row["known_at"],
+                    namespace=namespace,
+                    synthetic=args.synthetic,
+                    config=settings.agent_memory,
+                )
+                if episode is not None:
+                    episodes.append(episode)
+            print(
+                json.dumps(
+                    {"inserted": PostgresMemoryWriter(write_url).insert(episodes)}, sort_keys=True
+                )
+            )
+            return 0
+        if read_url is None:
+            parser.error("AGENT_MEMORY_DATABASE_URL is required for trader memory search")
+        as_of = datetime.fromisoformat(args.as_of).astimezone(UTC)
+        snapshot = Snapshot.model_validate_json(args.snapshot.read_text(encoding="utf-8"))
+        if snapshot.signal_time != as_of:
+            parser.error("--as-of must equal snapshot.signal_time")
+        vector = embed_snapshot(snapshot, settings.agent_memory)
+        if vector is None:
+            print(json.dumps({"items": [], "found": 0, "reason": "not_embeddable"}))
+            return 0
+        rows = PostgresMemorySource(read_url).search(
+            as_of=as_of,
+            candidate_key=snapshot.idempotency_key,
+            namespace=settings.agent_memory.namespace,
+            embedding=vector,
+            embedding_version=embedding_version(settings.agent_memory),
+            k=args.k or settings.agent_memory.k_cap,
+            max_distance=settings.agent_memory.max_distance,
+        )
+        print(json.dumps({"items": rows, "found": len(rows)}, default=str, sort_keys=True))
         return 0
 
     if args.command == "replay":

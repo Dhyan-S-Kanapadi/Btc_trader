@@ -10,7 +10,7 @@ from uuid import UUID
 from pydantic import Field
 
 from trader.agent.tracing import InvestigationTrace, TraceFactory
-from trader.agent_tools import CandleSource, ToolError, ToolRegistry
+from trader.agent_tools import CandleSource, MemorySource, ToolError, ToolRegistry
 from trader.config import AgentSettings, AgentTracingSettings, Settings
 from trader.guardrail import GuardrailResult, ToolResultRecord, check_verdict
 from trader.models import FrozenModel, Snapshot, Verdict
@@ -62,6 +62,8 @@ def investigate(
     trace_source: str = "cli",
     trace_factory: TraceFactory | None = None,
     tracing_config: AgentTracingSettings | None = None,
+    memory_source: MemorySource | None = None,
+    variant: str = "base",
 ) -> InvestigationResult:
     """Run the bounded plumbing; any bad model/tool/checkpoint outcome becomes guardrailed SKIP."""
     started = time.monotonic()
@@ -114,7 +116,14 @@ def investigate(
             )
         except Exception:
             return result("checkpointer_error", {})
-    registry = ToolRegistry(snapshot.signal_time, tool_source, Settings())
+    registry = ToolRegistry(
+        snapshot.signal_time,
+        tool_source,
+        Settings(),
+        snapshot=snapshot,
+        variant=variant,
+        memory_source=memory_source,
+    )
     try:
         for step in range(1, config.step_cap + 1):
             if time.monotonic() - started > config.wall_clock_seconds:

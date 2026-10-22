@@ -13,9 +13,11 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from trader.config import Settings
 from trader.data.binance import interval_delta
-from trader.models import Candle
+from trader.memory import embed_snapshot, embedding_version
+from trader.models import Candle, Snapshot
 from trader.strategy import atr_at, evaluate_candle
 
+from .memory import MemorySource
 from .source import CandleSource, ToolError, enforce_as_of
 
 
@@ -41,13 +43,27 @@ class FailedBreakoutsInput(_Input):
     confirm_bars: int | None = Field(default=None, gt=0)
 
 
+class SimilarPastSetupsInput(_Input):
+    k: int = Field(default=5, gt=0)
+
+
 class ToolRegistry:
     """Small, per-snapshot read-only registry; schemas intentionally omit as_of."""
 
-    def __init__(self, as_of: datetime, source: CandleSource, config: Settings) -> None:
+    def __init__(
+        self,
+        as_of: datetime,
+        source: CandleSource,
+        config: Settings,
+        *,
+        snapshot: Snapshot | None = None,
+        variant: str = "base",
+        memory_source: MemorySource | None = None,
+    ) -> None:
         if as_of.tzinfo is None or as_of.utcoffset() is None:
             raise ValueError("as_of must be timezone-aware")
         self.as_of, self.source, self.config, self.calls = as_of, source, config, 0
+        self.snapshot, self.variant, self.memory_source = snapshot, variant, memory_source
         self.records: list[dict[str, object]] = []
         self._models = {
             "volume_vs_average": VolumeInput,
@@ -55,13 +71,18 @@ class ToolRegistry:
             "volatility_regime": VolatilityInput,
             "recent_failed_breakouts": FailedBreakoutsInput,
         }
+        if config.agent_memory.enabled and variant == "memory" and memory_source is not None:
+            self._models["similar_past_setups"] = SimilarPastSetupsInput
 
     def schemas(self) -> dict[str, dict[str, object]]:
         return {name: model.model_json_schema() for name, model in self._models.items()}
 
     def call(self, name: str, args: dict[str, object]) -> dict[str, object]:
-        if "as_of" in args:
+        if any(key in args for key in ("as_of", "namespace", "embedding", "max_distance")):
             raise ToolError("as_of_override_rejected")
+        # Keep direct callers fail-closed too, while omitting this tool from the model schema.
+        if name == "similar_past_setups" and not self.config.agent_memory.enabled:
+            return {"items": [], "found": 0, "reason": "memory_off", "as_of": self.as_of}
         if self.calls >= self.config.agent_tools.max_calls_per_registry:
             raise ToolError("call_budget_exceeded")
         try:
@@ -72,6 +93,12 @@ class ToolRegistry:
         started = time.perf_counter()
         status, output, fetched = "ok", None, 0
         try:
+            if name == "similar_past_setups":
+                output = self._similar_past_setups(model)
+                self.records.append(
+                    {"tool_name": name, "as_of": self.as_of, "args": args, "output": output}
+                )
+                return output
             candles = list(
                 self.source.candles(
                     self.as_of,
@@ -107,6 +134,43 @@ class ToolRegistry:
                 )
             except Exception:
                 pass
+
+    def _similar_past_setups(self, args: SimilarPastSetupsInput) -> dict[str, object]:
+        memory = self.config.agent_memory
+        if not memory.enabled:
+            return {"items": [], "found": 0, "reason": "memory_off", "as_of": self.as_of}
+        if self.snapshot is None or self.memory_source is None:
+            return {"items": [], "found": 0, "reason": "not_embeddable", "as_of": self.as_of}
+        if args.k > memory.k_cap:
+            raise ToolError("k_cap_exceeded")
+        vector = embed_snapshot(self.snapshot, memory)
+        if vector is None:
+            return {"items": [], "found": 0, "reason": "not_embeddable", "as_of": self.as_of}
+        rows = list(
+            self.memory_source.search(
+                as_of=self.as_of,
+                candidate_key=self.snapshot.idempotency_key,
+                namespace=memory.namespace,
+                embedding=vector,
+                embedding_version=embedding_version(memory),
+                k=args.k,
+                max_distance=memory.max_distance,
+            )
+        )
+        for row in rows:
+            if row["known_at"] > self.as_of or row["candidate_time"] >= self.as_of:
+                raise ToolError("asof_violation")
+        positive = sum(Decimal(str(row["net_r"])) > 0 for row in rows)
+        return {
+            "items": rows,
+            "found": len(rows),
+            "positive_net_r": positive,
+            "non_positive_net_r": len(rows) - positive,
+            "data_through": max((row["known_at"] for row in rows), default=None),
+            "as_of": self.as_of,
+            "small_sample": len(rows) < memory.min_sample,
+            "reason": None,
+        }
 
     def _base(self, candles: list[Candle], reason: str | None = None) -> dict[str, object]:
         return {

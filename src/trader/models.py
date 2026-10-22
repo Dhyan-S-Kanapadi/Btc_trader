@@ -89,6 +89,7 @@ class Position(FrozenModel):
     """Minimal long-only spot position state."""
 
     account_id: str = Field(min_length=1)
+    candidate_idempotency_key: str | None = None
     symbol: str = Field(min_length=1)
     qty: Decimal = Field(gt=0)
     entry_price: Decimal = Field(gt=0)
@@ -116,6 +117,7 @@ class Trade(FrozenModel):
     """Minimal completed long-only spot trade."""
 
     account_id: str = Field(min_length=1)
+    candidate_idempotency_key: str | None = None
     symbol: str = Field(min_length=1)
     qty: Decimal = Field(gt=0)
     entry_price: Decimal = Field(gt=0)
