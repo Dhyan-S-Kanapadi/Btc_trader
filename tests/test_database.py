@@ -38,6 +38,7 @@ EXPECTED_TABLES = {
     "run_metadata",
     "news_items",
     "news_polls",
+    "jev_calls",
     "routed_candles",
     "snapshots",
     "trades",

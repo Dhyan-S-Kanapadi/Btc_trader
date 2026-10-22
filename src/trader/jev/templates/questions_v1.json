@@ -1,0 +1,12 @@
+{
+  "major_event_within_4h": {
+    "type": "boolean",
+    "instructions": "Is a major event scheduled or reported within four hours of the as-of time?"
+  },
+  "news_tone": {
+    "type": "score",
+    "instructions": "Score BTC-relevant tone from -1 to 1.",
+    "min": -1,
+    "max": 1
+  }
+}

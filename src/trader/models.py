@@ -61,7 +61,7 @@ class Snapshot(FrozenModel):
     price, and `trend_vs_sma` is reference price/SMA minus one.
     """
 
-    schema_version: Literal[1] = 1
+    schema_version: Literal[1, 2] = 1
     idempotency_key: str = Field(min_length=1)
     symbol: str = Field(min_length=1)
     signal_time: datetime
@@ -73,6 +73,25 @@ class Snapshot(FrozenModel):
     atr_pct: Decimal | None = None
     range_24h_pct: Decimal | None = None
     trend_vs_sma: Decimal | None = None
+    jev_event_4h: bool | None = None
+    jev_event_prob: Decimal | None = Field(default=None, ge=0, le=1)
+    jev_tone_score: Decimal | None = Field(default=None, ge=-1, le=1)
+    jev_status: (
+        Literal[
+            "ok",
+            "no_items",
+            "coverage_not_ok",
+            "disabled",
+            "timeout",
+            "error",
+            "invalid_response",
+            "cap_reached",
+            "circuit_open",
+        ]
+        | None
+    ) = None
+    jev_questions_version: str | None = None
+    jev_input_digest: str | None = None
 
     _validate_signal_time = field_validator("signal_time")(_utc_datetime)
 

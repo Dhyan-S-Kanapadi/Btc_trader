@@ -328,3 +328,31 @@ class NewsItemRow(Base):
     guardrail_version: Mapped[str] = mapped_column(String(64))
     synthetic: Mapped[bool] = mapped_column(default=False)
     poll_id: Mapped[UUID] = mapped_column(ForeignKey("news_polls.id"))
+
+
+class JevCallRow(Base):
+    """Sanitized Jev audit metadata; no headline text, raw response, or secret."""
+
+    __tablename__ = "jev_calls"
+
+    id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    request_key: Mapped[str] = mapped_column(String(64), unique=True)
+    candidate_idempotency_key: Mapped[str] = mapped_column(String(256))
+    as_of: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    window_hours: Mapped[int] = mapped_column()
+    questions_version: Mapped[str] = mapped_column(String(64))
+    template_version: Mapped[str] = mapped_column(String(64))
+    input_digest: Mapped[str] = mapped_column(String(64))
+    item_ids: Mapped[list[str]] = mapped_column(JSON)
+    status: Mapped[str] = mapped_column(String(32))
+    error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    http_status: Mapped[int | None] = mapped_column(nullable=True)
+    attempts: Mapped[int] = mapped_column(default=0)
+    latency_ms: Mapped[int | None] = mapped_column(nullable=True)
+    answers: Mapped[dict[str, object] | None] = mapped_column(JSON, nullable=True)
+    model: Mapped[str] = mapped_column(String(128))
+    cost_usd: Mapped[Decimal | None] = mapped_column(Numeric(20, 12), nullable=True)
+    cost_estimated: Mapped[bool] = mapped_column(default=True)
+    price_table_version: Mapped[str] = mapped_column(String(64))
+    synthetic: Mapped[bool] = mapped_column(default=False)

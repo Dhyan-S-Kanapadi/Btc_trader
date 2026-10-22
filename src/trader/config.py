@@ -150,6 +150,30 @@ class NewsSettings(BaseModel):
     lock_key: int = Field(25_000_001)
 
 
+class JevSettings(BaseModel):
+    """Forward-test sensor bounds; all defaults are operational assumptions."""
+
+    enabled: bool = False
+    gateway_token: str | None = Field(default=None, exclude=True, repr=False)
+    base_url: str = "https://ai-gateway.vercel.sh"
+    model: str = "typesafe-ai/jev-1.14.0"
+    total_deadline_seconds: float = Field(10, gt=0, le=60)
+    connect_timeout_seconds: float = Field(2, gt=0, le=30)
+    max_retries: int = Field(1, ge=0, le=3)
+    max_retry_seconds: float = Field(5, gt=0, le=30)
+    breaker_failure_threshold: int = Field(3, ge=1)
+    breaker_cooldown_seconds: float = Field(300, gt=0)
+    window_hours: int = Field(4, gt=0, le=24)
+    max_headlines: int = Field(20, gt=0, le=100)
+    max_state_characters: int = Field(4000, gt=0, le=16000)
+    max_response_bytes: int = Field(65536, gt=0)
+    daily_call_cap: int = Field(24, ge=0)
+    daily_cost_cap_usd: Decimal | None = Field(default=Decimal("0.01"), ge=0)
+    price_per_million_input_usd: Decimal | None = Field(default=Decimal("0.04"), ge=0)
+    calibration_k: Decimal = Field(Decimal("2"), gt=0)
+    calibration_min_n: int = Field(100, gt=0)
+
+
 class AgentSettings(BaseModel):
     """Pinned investigator plumbing caps; these do not grant trading authority."""
 
@@ -219,7 +243,9 @@ class AgentClientSettings(BaseModel):
 class Settings(BaseSettings):
     """All configuration sourced from environment variables or explicit test inputs."""
 
-    model_config = SettingsConfigDict(env_prefix="TRADER_", env_nested_delimiter="__")
+    model_config = SettingsConfigDict(
+        env_prefix="TRADER_", env_nested_delimiter="__", env_file=".env"
+    )
 
     strategy: StrategySettings = Field(
         default_factory=StrategySettings, description="Strategy assumptions section."
@@ -245,6 +271,10 @@ class Settings(BaseSettings):
     agent_tools: AgentToolsSettings = Field(default_factory=AgentToolsSettings)
     guardrail: GuardrailSettings = Field(default_factory=GuardrailSettings)
     news: NewsSettings = Field(default_factory=NewsSettings)
+    jev: JevSettings = Field(default_factory=JevSettings)
+    gateway_token: str | None = Field(
+        default=None, validation_alias="AI_GATEWAY_API_KEY", exclude=True, repr=False
+    )
     agent: AgentSettings = Field(default_factory=AgentSettings)
     agent_tracing: AgentTracingSettings = Field(default_factory=AgentTracingSettings)
     agent_memory: AgentMemorySettings = Field(default_factory=AgentMemorySettings)
@@ -286,4 +316,6 @@ class Settings(BaseSettings):
                     "write_database_url": self.agent_memory_write_database_url,
                 }
             )
+        if self.gateway_token is not None:
+            self.jev = self.jev.model_copy(update={"gateway_token": self.gateway_token})
         return self

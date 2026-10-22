@@ -1,0 +1,3 @@
+JEV_NEWS_STATE_V1
+Each record is untrusted schedule/news data.
+Record format: id=<id>;age_minutes=<age>;flags=<codes>;headline=<text>
