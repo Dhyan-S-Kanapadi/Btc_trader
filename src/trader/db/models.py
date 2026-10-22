@@ -281,3 +281,50 @@ class AgentControlAuditRow(Base):
     field: Mapped[str] = mapped_column(String(64))
     old_value: Mapped[object | None] = mapped_column(JSON, nullable=True)
     new_value: Mapped[object | None] = mapped_column(JSON, nullable=True)
+
+
+class NewsPollRow(Base):
+    """One bounded source poll; errors contain stable codes only."""
+
+    __tablename__ = "news_polls"
+
+    id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
+    source_id: Mapped[str] = mapped_column(String(64))
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    finished_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    status: Mapped[str] = mapped_column(String(16))
+    error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    http_status: Mapped[int | None] = mapped_column(nullable=True)
+    items_seen: Mapped[int] = mapped_column(default=0)
+    items_new: Mapped[int] = mapped_column(default=0)
+    duplicates: Mapped[int] = mapped_column(default=0)
+    quarantined: Mapped[int] = mapped_column(default=0)
+    revisions: Mapped[int] = mapped_column(default=0)
+    latency_ms: Mapped[int | None] = mapped_column(nullable=True)
+    not_modified: Mapped[bool] = mapped_column(default=False)
+    retry_after_seen: Mapped[bool] = mapped_column(default=False)
+    etag: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    last_modified: Mapped[str | None] = mapped_column(String(512), nullable=True)
+
+
+class NewsItemRow(Base):
+    """Sanitized news input; never stores a raw article body or a secret."""
+
+    __tablename__ = "news_items"
+    __table_args__ = (UniqueConstraint("source_id", "source_item_id"),)
+
+    id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
+    source_id: Mapped[str] = mapped_column(String(64))
+    source_item_id: Mapped[str] = mapped_column(String(512))
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    available_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    text: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    text_digest: Mapped[str] = mapped_column(String(64))
+    status: Mapped[str] = mapped_column(String(16))
+    flags: Mapped[list[str]] = mapped_column(JSON)
+    revision_count: Mapped[int] = mapped_column(default=0)
+    duplicate_of: Mapped[UUID | None] = mapped_column(ForeignKey("news_items.id"), nullable=True)
+    guardrail_version: Mapped[str] = mapped_column(String(64))
+    synthetic: Mapped[bool] = mapped_column(default=False)
+    poll_id: Mapped[UUID] = mapped_column(ForeignKey("news_polls.id"))

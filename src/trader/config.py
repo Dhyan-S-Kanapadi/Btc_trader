@@ -129,6 +129,27 @@ class GuardrailSettings(BaseModel):
     max_citations: int = Field(12, gt=0)
 
 
+class NewsSettings(BaseModel):
+    """Forward-test BLS schedule bounds; each default is an operational assumption."""
+
+    sources: str = "bls"
+    poll_interval_seconds: int = Field(300, gt=0)
+    total_deadline_seconds: float = Field(10, gt=0)
+    max_retries: int = Field(2, ge=0, le=5)
+    max_retry_seconds: float = Field(30, gt=0)
+    breaker_failure_threshold: int = Field(3, ge=1)
+    breaker_cooldown_seconds: float = Field(300, gt=0)
+    max_items_per_poll: int = Field(100, gt=0, le=1000)
+    max_response_bytes: int = Field(1_000_000, gt=0)
+    redirect_limit: int = Field(2, ge=0, le=5)
+    skew_seconds: int = Field(300, ge=0)
+    max_timestamp_age_seconds: int = Field(31_536_000, gt=0)
+    max_poll_staleness_seconds: int = Field(900, gt=0)
+    near_duplicate_window_seconds: int = Field(86_400, gt=0)
+    text_cap: int = Field(200, gt=1, le=1000)
+    lock_key: int = Field(25_000_001)
+
+
 class AgentSettings(BaseModel):
     """Pinned investigator plumbing caps; these do not grant trading authority."""
 
@@ -223,6 +244,7 @@ class Settings(BaseSettings):
     )
     agent_tools: AgentToolsSettings = Field(default_factory=AgentToolsSettings)
     guardrail: GuardrailSettings = Field(default_factory=GuardrailSettings)
+    news: NewsSettings = Field(default_factory=NewsSettings)
     agent: AgentSettings = Field(default_factory=AgentSettings)
     agent_tracing: AgentTracingSettings = Field(default_factory=AgentTracingSettings)
     agent_memory: AgentMemorySettings = Field(default_factory=AgentMemorySettings)
