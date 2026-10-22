@@ -6,6 +6,7 @@ from decimal import Decimal
 import pytest
 
 from trader.config import Settings
+from trader.models import Candidate
 from trader.replay import (
     AccountConfig,
     TakeAllPolicy,
@@ -144,3 +145,69 @@ def test_router_shares_signal_but_keeps_accounts_independent() -> None:
 def test_unknown_account_policy_fails_fast() -> None:
     with pytest.raises(ValueError, match="unknown paper-account policy"):
         policy_for("not-a-policy", _config())
+
+
+def test_router_completes_every_phase_one_before_a_policy_runs(monkeypatch) -> None:
+    """The worker can persist all phase-one results before a future agent policy call."""
+
+    from trader.replay import router
+
+    candles = generate_candles(9, 120, datetime(2026, 1, 1, tzinfo=UTC), "1h")
+    config = _config()
+    events: list[tuple[str, str]] = []
+    original = router.phase_one
+
+    def phase(state, history, candle, settings, stale):
+        events.append(("phase_one", state.account_id))
+        return original(state, history, candle, settings, stale)
+
+    class Policy:
+        def decide(self, snapshot, candidate):
+            events.append(("policy", candidate.idempotency_key))
+            return TakeAllPolicy().decide(snapshot, candidate)
+
+    monkeypatch.setattr(router, "phase_one", phase)
+    monkeypatch.setattr(
+        router,
+        "evaluate_candle",
+        lambda *_args: Candidate(
+            symbol="SYNTH-BTC",
+            bar_index=len(candles) - 1,
+            signal_time=candles[-1].open_time,
+            reference_price=candles[-1].close,
+            atr=Decimal("1"),
+            breakout_level=candles[-1].close,
+            idempotency_key="phase-order",
+        ),
+    )
+    accounts = {
+        account_id: (
+            ReplayState(
+                account_id=account_id,
+                cash=Decimal("10000"),
+                risk=AccountState(
+                    account_id=account_id,
+                    equity=Decimal("10000"),
+                    peak_equity=Decimal("10000"),
+                    day_start_equity=Decimal("10000"),
+                    current_day=candles[0].open_time.date(),
+                    open_position_count=0,
+                ),
+            ),
+            AccountConfig(
+                account_id=account_id,
+                label=account_id,
+                policy_name="skip_all",
+                starting_equity=Decimal("10000"),
+            ),
+        )
+        for account_id in ("A", "B")
+    }
+    router.route_candle(
+        accounts, candles, candles[-1], config, policies={"A": Policy(), "B": Policy()}
+    )
+    first_policy = next(index for index, event in enumerate(events) if event[0] == "policy")
+    assert {account_id for kind, account_id in events[:first_policy] if kind == "phase_one"} == {
+        "A",
+        "B",
+    }

@@ -103,6 +103,9 @@ class DecisionRow(Base):
     prompt_version: Mapped[str | None] = mapped_column(String(128), nullable=True)
     trace_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
     shadow: Mapped[bool] = mapped_column(default=False)
+    guardrail_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    agent_status: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    agent_call_id: Mapped[UUID | None] = mapped_column(nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
@@ -185,7 +188,26 @@ class RoutedCandleRow(Base):
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
     account_id: Mapped[str] = mapped_column(ForeignKey("accounts.account_id"))
     candle_id: Mapped[UUID] = mapped_column(ForeignKey("candles.id"))
+    phase: Mapped[str] = mapped_column(String(16), default="complete")
     reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class AgentCallRow(Base):
+    """Sanitized reusable outcome of one agent request; never contains credentials."""
+
+    __tablename__ = "agent_calls"
+    __table_args__ = (UniqueConstraint("request_key"),)
+
+    id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    request_key: Mapped[str] = mapped_column(String(128))
+    variant: Mapped[str] = mapped_column(String(64))
+    candidate_key: Mapped[str] = mapped_column(String(256))
+    snapshot_digest: Mapped[str] = mapped_column(String(128))
+    target: Mapped[str] = mapped_column(String(32))
+    status: Mapped[str] = mapped_column(String(64))
+    trace_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    result_json: Mapped[dict[str, object] | None] = mapped_column(JSON, nullable=True)
 
 
 class ConfigRow(Base):

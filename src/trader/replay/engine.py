@@ -109,6 +109,20 @@ class StepResult(FrozenModel):
     equity_point: EquityPoint
 
 
+class PhaseOneResult(FrozenModel):
+    """Durable, agent-free portion of a bar transition.
+
+    This deliberately ends before candidate policy evaluation so a worker can
+    persist fills, exits and marks for every account before any remote call.
+    """
+
+    state: ReplayState
+    decisions: tuple[RecordedDecision, ...] = ()
+    fills: tuple[Fill, ...] = ()
+    trades: tuple[Trade, ...] = ()
+    equity_point: EquityPoint
+
+
 def history_window(config: Settings) -> int:
     """Return enough trailing candles for ATR, breakout and snapshot trend calculations."""
 
@@ -119,17 +133,14 @@ def history_window(config: Settings) -> int:
     )
 
 
-def step(
+def phase_one(
     state: ReplayState,
     history: Sequence[Candle],
     candle: Candle,
-    policy: DecisionPolicy,
     config: Settings,
-    signal: SharedSignal | None = None,
     data_is_stale: bool = False,
-    allow_entries: bool = True,
-) -> StepResult:
-    """Process one closed candle: fill, exit, mark/roll day, then signal and queue next entry."""
+) -> PhaseOneResult:
+    """Process fills, exits and marking; this function has no policy or agent path."""
 
     if not history or history[-1] != candle:
         raise ValueError("history must end with the newly closed candle")
@@ -215,7 +226,37 @@ def step(
     equity = cash + (position.qty * candle.close if position is not None else Decimal("0"))
     risk = roll_day(risk, equity, candle.open_time)
 
-    # 5. Candidate construction uses only the supplied history ending at this candle.
+    return PhaseOneResult(
+        state=ReplayState(
+            account_id=state.account_id,
+            cash=cash,
+            position=position,
+            pending_entry=pending,
+            risk=risk,
+        ),
+        decisions=tuple(decisions),
+        fills=tuple(fills),
+        trades=tuple(trades),
+        equity_point=EquityPoint(recorded_at=candle.open_time, equity=equity),
+    )
+
+
+def phase_two(
+    phase: PhaseOneResult,
+    history: Sequence[Candle],
+    candle: Candle,
+    policy: DecisionPolicy,
+    config: Settings,
+    signal: SharedSignal | None = None,
+    data_is_stale: bool = False,
+    allow_entries: bool = True,
+) -> StepResult:
+    """Apply the candidate decision after phase one has been durably persisted."""
+
+    state = phase.state
+    cash, position, pending, risk = state.cash, state.position, state.pending_entry, state.risk
+    decisions = list(phase.decisions)
+    # Candidate construction uses only the supplied history ending at this candle.
     if signal is None:
         candidate = evaluate_candle(history, len(history) - 1, config.strategy)
         signal = (
@@ -265,7 +306,31 @@ def step(
             risk=risk,
         ),
         decisions=tuple(decisions),
-        fills=tuple(fills),
-        trades=tuple(trades),
-        equity_point=EquityPoint(recorded_at=candle.open_time, equity=equity),
+        fills=phase.fills,
+        trades=phase.trades,
+        equity_point=phase.equity_point,
+    )
+
+
+def step(
+    state: ReplayState,
+    history: Sequence[Candle],
+    candle: Candle,
+    policy: DecisionPolicy,
+    config: Settings,
+    signal: SharedSignal | None = None,
+    data_is_stale: bool = False,
+    allow_entries: bool = True,
+) -> StepResult:
+    """Compose the two pure phases for replay callers that need no persistence boundary."""
+
+    return phase_two(
+        phase_one(state, history, candle, config, data_is_stale),
+        history,
+        candle,
+        policy,
+        config,
+        signal,
+        data_is_stale,
+        allow_entries,
     )
