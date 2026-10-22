@@ -136,6 +136,7 @@ class PositionRow(Base):
 
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
     account_id: Mapped[str] = mapped_column(ForeignKey("accounts.account_id"))
+    candidate_idempotency_key: Mapped[str | None] = mapped_column(String(256), nullable=True)
     symbol: Mapped[str] = mapped_column(String(32))
     qty: Mapped[Decimal] = mapped_column(MONEY)
     entry_price: Mapped[Decimal] = mapped_column(MONEY)
@@ -155,6 +156,7 @@ class TradeRow(Base):
 
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
     account_id: Mapped[str] = mapped_column(ForeignKey("accounts.account_id"))
+    candidate_idempotency_key: Mapped[str | None] = mapped_column(String(256), nullable=True)
     symbol: Mapped[str] = mapped_column(String(32))
     qty: Mapped[Decimal] = mapped_column(MONEY)
     entry_price: Mapped[Decimal] = mapped_column(MONEY)

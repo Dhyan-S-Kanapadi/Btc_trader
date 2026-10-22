@@ -174,6 +174,7 @@ def phase_one(
                 fills.append(entry)
                 position = Position(
                     account_id=state.account_id,
+                    candidate_idempotency_key=pending.candidate.idempotency_key,
                     symbol=candle.symbol,
                     qty=entry.quantity,
                     entry_price=entry.price,
