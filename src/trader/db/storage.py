@@ -3,7 +3,7 @@
 # ruff: noqa: E501
 
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Protocol
 from uuid import UUID
@@ -25,6 +25,8 @@ from .models import (
     ConfigRow,
     DecisionRow,
     EquityPointRow,
+    NewsItemRow,
+    NewsPollRow,
     OrderRow,
     PositionRow,
     RoutedCandleRow,
@@ -136,6 +138,96 @@ class PostgresStorage:
     def __init__(self, database_url: str) -> None:
         self._engine = create_engine(database_url)
         self._sessions = sessionmaker(self._engine, expire_on_commit=False)
+
+    def recent_news_polls(self, sources: tuple[str, ...], as_of: datetime, since: datetime):
+        """Read only successful polls in the requested as-of window."""
+        with self._sessions() as session:
+            return list(
+                session.scalars(
+                    select(NewsPollRow).where(
+                        NewsPollRow.source_id.in_(sources),
+                        NewsPollRow.status == "ok",
+                        NewsPollRow.finished_at >= since,
+                        NewsPollRow.finished_at <= as_of,
+                    )
+                )
+            )
+
+    def news_conditional_state(self, source_id: str) -> dict[str, str]:
+        with self._sessions() as session:
+            row = session.scalar(
+                select(NewsPollRow)
+                .where(NewsPollRow.source_id == source_id, NewsPollRow.status == "ok")
+                .order_by(NewsPollRow.finished_at.desc())
+                .limit(1)
+            )
+            return {
+                key: value
+                for key, value in {
+                    "etag": row.etag if row else None,
+                    "last_modified": row.last_modified if row else None,
+                }.items()
+                if value
+            }
+
+    def read_news_items(self, as_of: datetime, sources: tuple[str, ...], synthetic: bool = False):
+        """Enforce source/status/synthetic/as-of filters at the durable read boundary."""
+        with self._sessions() as session:
+            return list(
+                session.scalars(
+                    select(NewsItemRow)
+                    .where(
+                        NewsItemRow.source_id.in_(sources),
+                        NewsItemRow.synthetic == synthetic,
+                        NewsItemRow.status.in_(("clean", "flagged")),
+                        NewsItemRow.available_at <= as_of,
+                    )
+                    .order_by(NewsItemRow.available_at, NewsItemRow.id)
+                )
+            )
+
+    def save_news_poll(self, **values: object) -> UUID:
+        """Persist a poll without response bodies, credentials, or raw titles."""
+        with self._sessions.begin() as session:
+            row = NewsPollRow(**values)
+            session.add(row)
+            session.flush()
+            return row.id
+
+    def save_news_item(self, **values: object) -> tuple[UUID, bool, bool]:
+        """Keep the first source revision; return id, inserted, revision_seen."""
+        with self._sessions.begin() as session:
+            existing = session.scalar(
+                select(NewsItemRow).where(
+                    NewsItemRow.source_id == values["source_id"],
+                    NewsItemRow.source_item_id == values["source_item_id"],
+                )
+            )
+            if existing is not None:
+                changed = existing.text_digest != values.get("text_digest")
+                if changed:
+                    existing.revision_count += 1
+                return existing.id, False, changed
+            row = NewsItemRow(**values)
+            session.add(row)
+            session.flush()
+            return row.id, True, False
+
+    def find_news_duplicate(
+        self, source_id: str, text_digest: str, fetched_at: datetime, window_seconds: int
+    ):
+        with self._sessions() as session:
+            return session.scalar(
+                select(NewsItemRow)
+                .where(
+                    NewsItemRow.source_id != source_id,
+                    NewsItemRow.text_digest == text_digest,
+                    NewsItemRow.fetched_at >= fetched_at - timedelta(seconds=window_seconds),
+                    NewsItemRow.fetched_at <= fetched_at,
+                )
+                .order_by(NewsItemRow.fetched_at, NewsItemRow.id)
+                .limit(1)
+            )
 
     def save_candle(self, candle: Candle, interval: str) -> UUID:
         with self._sessions.begin() as session:

@@ -5,6 +5,32 @@ order-placement, or live-trading configuration. It is not financial advice.
 
 All strategy and cost defaults are assumptions to test, not validated choices.
 
+## Forward-test news boundary
+
+Issue #25 admits only the official BLS release calendar, and only for prospective collection.
+It is not a general news feed, is not historical replay evidence, and does not predict BTC returns.
+`fetched_at` is the injected-clock receipt time; source `published_at` is nullable and untrusted.
+An item is visible at `T` exactly when `available_at <= T`, where live collection sets
+`available_at = fetched_at`; publication time can never make it visible earlier. This resolves the
+as-of ambiguity conservatively.
+
+The pure pipeline is: bounded fetch, calendar parse, HTML entity decoding (at most three passes),
+tag/script/style removal, NFKC normalization, control/format removal, whitespace collapse,
+URL/email/markup removal, length cap, then deterministic guardrail classification. The guardrail
+reuses Issue #19 injection patterns and adds hard rules for instructions, role markers, tool syntax,
+embedded structured data, and forced yes/no answers. Hard matches are quarantined; padding is only
+flagged. A false-positive quarantine loses a real schedule item, which is safer than passing an
+instruction-shaped string. Pattern matching is not an attack-proof boundary: any future consumer
+must use only bounded typed `SanitizedHeadline`/`NewsView` fields, never prose as authority.
+
+`news_items` and `news_polls` are isolated by migration `0008_news_ingestion`; no API endpoint,
+dashboard display, worker import, model call, or trading path is added. BLS terms recorded in
+[`0002-news-and-jev.md`](docs/decisions/0002-news-and-jev.md) permit schedule metadata with
+attribution/disclaimer; this issue does not expose it publicly. The poller is deliberately separate
+from the hourly worker because receipt-time evidence needs more frequent collection; deployment is
+deferred to #32. Retention is also deferred, so table growth is proportional to polls and unique
+calendar entries.
+
 ## Quickstart
 
 Requires Python 3.12 or newer.

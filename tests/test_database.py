@@ -11,7 +11,7 @@ from sqlalchemy.exc import IntegrityError
 from trader.cli import main
 from trader.config import Settings
 from trader.db.migrations import downgrade_base, upgrade_head
-from trader.db.models import DecisionRow, OrderRow
+from trader.db.models import DecisionRow, NewsItemRow, OrderRow
 from trader.db.storage import DecisionWrite, OrderWrite, PostgresStorage
 from trader.models import Candidate, Candle
 from trader.replay import (
@@ -36,6 +36,8 @@ EXPECTED_TABLES = {
     "orders",
     "positions",
     "run_metadata",
+    "news_items",
+    "news_polls",
     "routed_candles",
     "snapshots",
     "trades",
@@ -239,6 +241,57 @@ def test_postgres_advisory_lock_allows_only_one_worker(storage: PostgresStorage)
     finally:
         first.close()
         second.close()
+
+
+def test_news_reader_enforces_as_of_source_status_and_synthetic(storage: PostgresStorage) -> None:
+    now = datetime(2026, 1, 1, tzinfo=UTC)
+    poll_id = storage.save_news_poll(
+        source_id="bls",
+        started_at=now,
+        finished_at=now,
+        status="ok",
+        error_code=None,
+        http_status=None,
+        items_seen=1,
+        items_new=1,
+        duplicates=0,
+        quarantined=0,
+        revisions=0,
+        latency_ms=1,
+        not_modified=False,
+        retry_after_seen=False,
+        etag=None,
+        last_modified=None,
+    )
+    common = dict(
+        source_id="bls",
+        published_at=None,
+        fetched_at=now,
+        text="Jobs",
+        text_digest="a",
+        flags=[],
+        guardrail_version="test",
+        synthetic=False,
+        poll_id=poll_id,
+        revision_count=0,
+    )
+    storage.save_news_item(
+        source_item_id="visible", available_at=now, status="clean", duplicate_of=None, **common
+    )
+    storage.save_news_item(
+        source_item_id="future",
+        available_at=now.replace(year=2027),
+        status="clean",
+        duplicate_of=None,
+        **common,
+    )
+    storage.save_news_item(
+        source_item_id="bad", available_at=now, status="quarantined", duplicate_of=None, **common
+    )
+    rows = storage.read_news_items(now, ("bls",), synthetic=False)
+    assert [row.source_item_id for row in rows] == ["visible"]
+    with storage._sessions() as session:
+        assert session.scalar(select(func.count()).select_from(NewsItemRow)) == 3
 
 
 def test_seeded_multi_account_cli_persists_to_a_fresh_database(

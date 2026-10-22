@@ -51,6 +51,15 @@ def build_parser() -> argparse.ArgumentParser:
     report.add_argument("--output-dir", type=Path, default=Path("report-output"))
     subcommands.add_parser("worker", help=f"Reserved for issue #{_COMMAND_ISSUES['worker']}.")
     subcommands.add_parser("api", help="Run the read-only paper-trading HTTP API.")
+    news = subcommands.add_parser("news", help="Run isolated BLS forward-test ingestion.")
+    news_commands = news.add_subparsers(dest="news_command", required=True)
+    news_commands.add_parser("poll", help="Perform one bounded BLS poll.").add_argument(
+        "--once", action="store_true", required=True
+    )
+    news_commands.add_parser("run", help="Poll BLS until SIGTERM or SIGINT.")
+    news_commands.add_parser(
+        "show", help="Show clean/flagged BLS data visible as of UTC."
+    ).add_argument("--as-of", required=True)
     control = subcommands.add_parser(
         "control", help="Inspect or change fail-closed agent controls."
     )
@@ -357,6 +366,32 @@ def main(argv: Sequence[str] | None = None) -> int:
         from trader.config import Settings
 
         return run_api(Settings())
+
+    if args.command == "news":
+        from trader.config import Settings
+        from trader.db.storage import PostgresStorage
+        from trader.news.service import poll_once, run, show
+        from trader.news.sources import BlsCalendarSource
+
+        settings = Settings()
+        if settings.database_url is None:
+            parser.error("DATABASE_URL is required for trader news")
+        storage = PostgresStorage(settings.database_url)
+        if args.news_command == "poll":
+            source = BlsCalendarSource(settings.news)
+            try:
+                print(json.dumps(poll_once(storage, settings.news, source), sort_keys=True))
+            finally:
+                source.close()
+            return 0
+        if args.news_command == "run":
+            return run(storage, settings.news)
+        try:
+            as_of = datetime.fromisoformat(args.as_of.replace("Z", "+00:00")).astimezone(UTC)
+        except ValueError:
+            parser.error("--as-of must be an ISO-8601 UTC timestamp")
+        print(show(storage, settings.news, as_of).model_dump_json())
+        return 0
 
     issue = _COMMAND_ISSUES[args.command]
     configure_logging().error(
