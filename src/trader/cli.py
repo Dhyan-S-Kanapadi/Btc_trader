@@ -60,6 +60,14 @@ def build_parser() -> argparse.ArgumentParser:
     news_commands.add_parser(
         "show", help="Show clean/flagged BLS data visible as of UTC."
     ).add_argument("--as-of", required=True)
+    jev = subcommands.add_parser("jev", help="Inspect isolated Jev-sensor calibration inputs.")
+    jev_commands = jev.add_subparsers(dest="jev_command", required=True)
+    calibrate = jev_commands.add_parser(
+        "calibrate", help="Summarize human-label readiness; no model call."
+    )
+    calibrate.add_argument(
+        "--labels", type=Path, default=Path("spikes/news_jev/labeling_sheet.csv")
+    )
     memory = subcommands.add_parser("memory", help="Manage separate, agent-only episodic memory.")
     memory_subcommands = memory.add_subparsers(dest="memory_command", required=True)
     memory_subcommands.add_parser("init", help="Initialize pgvector memory schema and roles.")
@@ -510,6 +518,29 @@ def main(argv: Sequence[str] | None = None) -> int:
         except ValueError:
             parser.error("--as-of must be an ISO-8601 UTC timestamp")
         print(show(storage, settings.news, as_of).model_dump_json())
+        return 0
+
+    if args.command == "jev":
+        import csv
+
+        try:
+            with args.labels.open(encoding="utf-8", newline="") as file:
+                rows = list(csv.DictReader(file))
+        except OSError as error:
+            parser.error(f"cannot read labels: {error}")
+        labeled = sum(
+            bool(row.get("event_within_4h_label") or row.get("news_tone_label")) for row in rows
+        )
+        print(
+            json.dumps(
+                {
+                    "rows": len(rows),
+                    "labeled": labeled,
+                    "status": "insufficient_labels" if not labeled else "labels_present",
+                },
+                sort_keys=True,
+            )
+        )
         return 0
 
     issue = _COMMAND_ISSUES[args.command]

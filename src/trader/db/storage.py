@@ -25,6 +25,7 @@ from .models import (
     ConfigRow,
     DecisionRow,
     EquityPointRow,
+    JevCallRow,
     NewsItemRow,
     NewsPollRow,
     OrderRow,
@@ -212,6 +213,36 @@ class PostgresStorage:
             session.add(row)
             session.flush()
             return row.id, True, False
+
+    def load_jev_call(self, request_key: str) -> dict[str, object] | None:
+        """Only successful typed outcomes are reusable; failures never hide recovery."""
+        with self._sessions() as session:
+            row = session.scalar(select(JevCallRow).where(JevCallRow.request_key == request_key))
+            if row is None or row.status != "ok" or row.answers is None:
+                return None
+            return dict(row.answers)
+
+    def save_jev_call(self, **values: object) -> UUID:
+        with self._sessions.begin() as session:
+            row = session.scalar(
+                select(JevCallRow).where(JevCallRow.request_key == values["request_key"])
+            )
+            if row is None:
+                row = JevCallRow(**values)
+                session.add(row)
+                session.flush()
+            return row.id
+
+    def jev_daily_usage(self, day: datetime) -> tuple[int, Decimal]:
+        start = day.astimezone(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
+        with self._sessions() as session:
+            count, cost = session.execute(
+                select(func.count(), func.coalesce(func.sum(JevCallRow.cost_usd), 0)).where(
+                    JevCallRow.created_at >= start,
+                    JevCallRow.created_at < start + timedelta(days=1),
+                )
+            ).one()
+            return int(count), Decimal(cost)
 
     def find_news_duplicate(
         self, source_id: str, text_digest: str, fetched_at: datetime, window_seconds: int

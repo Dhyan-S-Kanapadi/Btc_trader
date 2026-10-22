@@ -69,6 +69,12 @@ base path and an OpenAI-compatible decisions route. This is the simplest
 documented gateway route for a small Python worker, but it still requires a
 secret supplied only via a local ignored environment variable.
 
+**Update, 2026-10-22:** The operator explicitly accepted the TypeSafe/Vercel terms for this narrow
+purpose: sending sanitized, bounded BLS schedule headlines to Vercel AI Gateway. Issue #26 may use
+the pinned Gateway route with an environment-only key. This changes neither the BLS-only forward-test
+limit nor the requirement to keep Jev a typed snapshot sensor; it does not approve raw headlines,
+article bodies, credentials, replay use, or any predictive claim.
+
 **UNVERIFIED:** direct `api.typesafe.ai/v1/systemone`, Cloudflare Workers AI,
 OpenRouter, Netlify, current gateway rate limits, regions, retention/training,
 zero-data-retention, provider subprocessor path, timeout/error envelope, and

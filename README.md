@@ -14,6 +14,20 @@ An item is visible at `T` exactly when `available_at <= T`, where live collectio
 `available_at = fetched_at`; publication time can never make it visible earlier. This resolves the
 as-of ambiguity conservatively.
 
+## Optional Jev sensor
+
+Issue #26 adds an isolated, disabled-by-default typed Jev sensor. When explicitly enabled, it sends
+only bounded, sanitized BLS schedule headlines that were already visible at the snapshot timestamp to
+Vercel AI Gateway. Set `AI_GATEWAY_API_KEY` only in ignored `.env` or a secret manager, then set
+`TRADER_JEV__ENABLED=true` after completing the calibration plan in
+[`docs/analysis/jev_calibration_plan.md`](docs/analysis/jev_calibration_plan.md). The client uses a
+pinned HTTPS gateway host, a total deadline, bounded retries and response size, and a circuit breaker.
+
+Jev creates typed nullable snapshot evidence only. It is not wired into the worker, risk engine,
+broker, router, replay, account policy, or API, and cannot trade or affect a risk value. Its BLS-only
+input is forward-test-only; it makes no claim that news or Jev predicts BTC returns. Use
+`trader jev calibrate` to check human-label readiness; it never contacts the gateway.
+
 The pure pipeline is: bounded fetch, calendar parse, HTML entity decoding (at most three passes),
 tag/script/style removal, NFKC normalization, control/format removal, whitespace collapse,
 URL/email/markup removal, length cap, then deterministic guardrail classification. The guardrail
