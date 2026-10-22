@@ -16,6 +16,10 @@ from trader.models import Candidate, Candle, Snapshot
 
 from .models import (
     AccountRow,
+    AgentAccountControlRow,
+    AgentCallRow,
+    AgentControlAuditRow,
+    AgentGlobalControlRow,
     CandidateRow,
     CandleRow,
     ConfigRow,
@@ -83,6 +87,10 @@ class PaperStorage(Protocol):
     def candle_routed_for_accounts(
         self, symbol: str, interval: str, open_time: datetime, account_ids: list[str]
     ) -> bool: ...
+
+    def load_agent_call(self, request_key: str) -> dict[str, object] | None: ...
+
+    def save_agent_call(self, request_key: str, payload: dict[str, object]) -> UUID: ...
 
     def candle_id(self, symbol: str, interval: str, open_time: datetime) -> UUID: ...
 
@@ -263,6 +271,7 @@ class PostgresStorage:
                 .where(
                     RoutedCandleRow.candle_id == candle_id,
                     RoutedCandleRow.account_id.in_(account_ids),
+                    RoutedCandleRow.phase == "complete",
                 )
             )
             return count == len(account_ids)
@@ -273,8 +282,111 @@ class PostgresStorage:
         with self._sessions() as session:
             session.execute(select(RoutedCandleRow.id).limit(1))
 
+    def seed_agent_controls(self) -> None:
+        """Idempotently create conservative controls; never overwrite operator choices."""
+
+        from trader.control import DEFAULT_PER_CANDIDATE_CAP, DEFAULT_PER_DAY_CAP
+
+        with self._sessions.begin() as session:
+            if session.get(AgentGlobalControlRow, 1) is None:
+                session.add(
+                    AgentGlobalControlRow(
+                        id=1,
+                        agent_enabled=False,
+                        kill_switch=False,
+                        per_candidate_cap=DEFAULT_PER_CANDIDATE_CAP,
+                        per_day_cap=DEFAULT_PER_DAY_CAP,
+                    )
+                )
+            for account_id in ("B", "C", "D"):
+                if session.get(AgentAccountControlRow, account_id) is None:
+                    session.add(AgentAccountControlRow(account_id=account_id))
+
+    def load_agent_control(self):
+        """Read one immutable control snapshot; callers treat any exception as unreadable."""
+
+        from trader.control import AccountControl, ControlConfig, GlobalControl
+
+        with self._sessions() as session:
+            global_row = session.get(AgentGlobalControlRow, 1)
+            if global_row is None:
+                return ControlConfig()
+            accounts = {
+                row.account_id: AccountControl(
+                    account_id=row.account_id,
+                    agent_enabled=row.agent_enabled,
+                    shadow=row.shadow,
+                    kill_switch=row.kill_switch,
+                    per_candidate_cap=row.per_candidate_cap,
+                    per_day_cap=row.per_day_cap,
+                    fallback_policy=row.fallback_policy,
+                )
+                for row in session.scalars(select(AgentAccountControlRow))
+            }
+            return ControlConfig(
+                global_control=GlobalControl(
+                    agent_enabled=global_row.agent_enabled,
+                    kill_switch=global_row.kill_switch,
+                    model_version=global_row.model_version,
+                    prompt_version=global_row.prompt_version,
+                    per_candidate_cap=global_row.per_candidate_cap,
+                    per_day_cap=global_row.per_day_cap,
+                ),
+                accounts=accounts,
+            )
+
+    def set_agent_control(self, scope: str, field: str, value: object, actor: str) -> None:
+        """Atomically update one allowlisted operator field and append its audit event."""
+
+        global_fields = {
+            "agent_enabled",
+            "kill_switch",
+            "model_version",
+            "prompt_version",
+            "per_candidate_cap",
+            "per_day_cap",
+        }
+        account_fields = {
+            "agent_enabled",
+            "shadow",
+            "kill_switch",
+            "per_candidate_cap",
+            "per_day_cap",
+            "fallback_policy",
+        }
+        is_global = scope == "global"
+        if field not in (global_fields if is_global else account_fields):
+            raise ValueError("field is not allowed")
+        with self._sessions.begin() as session:
+            if is_global:
+                row = session.get(AgentGlobalControlRow, 1)
+                if row is None:
+                    raise LookupError("global controls are not seeded")
+            else:
+                row = session.get(AgentAccountControlRow, scope)
+                if row is None:
+                    row = AgentAccountControlRow(account_id=scope)
+                    session.add(row)
+                    session.flush()
+            old_value = getattr(row, field)
+            setattr(row, field, value)
+            session.add(
+                AgentControlAuditRow(
+                    actor=actor,
+                    scope=scope,
+                    field=field,
+                    old_value=str(old_value) if isinstance(old_value, Decimal) else old_value,
+                    new_value=value,
+                )
+            )
+
     def persist_routed_candle(
-        self, interval: str, candle: Candle, results: object, reason: str | None = None
+        self,
+        interval: str,
+        candle: Candle,
+        results: object,
+        reason: str | None = None,
+        phase: str = "complete",
     ) -> None:
         """Atomically persist a routed candle, states, evidence, and its durable checkpoints."""
 
@@ -349,7 +461,10 @@ class PostgresStorage:
                                 reason=reason or decision.reason,
                                 verdict={"risk_code": decision.risk_code}
                                 if decision.risk_code is not None
-                                else None,
+                                else decision.verdict,
+                                shadow=decision.shadow,
+                                model_version=decision.model_version,
+                                prompt_version=decision.prompt_version,
                             )
                         )
                         session.add(
@@ -411,8 +526,83 @@ class PostgresStorage:
                     is None
                 ):
                     session.add(
-                        RoutedCandleRow(account_id=account_id, candle_id=candle_id, reason=reason)
+                        RoutedCandleRow(
+                            account_id=account_id, candle_id=candle_id, phase=phase, reason=reason
+                        )
                     )
+                else:
+                    checkpoint = session.scalar(
+                        select(RoutedCandleRow).where(
+                            RoutedCandleRow.account_id == account_id,
+                            RoutedCandleRow.candle_id == candle_id,
+                        )
+                    )
+                    assert checkpoint is not None
+                    checkpoint.phase = phase
+                    checkpoint.reason = reason
+
+    def candle_phase_one_for_accounts(
+        self, symbol: str, interval: str, open_time: datetime, account_ids: list[str]
+    ) -> bool:
+        """Return whether the atomic no-agent phase is durable for every account."""
+
+        if not account_ids:
+            return True
+        with self._sessions() as session:
+            candle_id = session.scalar(
+                select(CandleRow.id).where(
+                    CandleRow.symbol == symbol,
+                    CandleRow.interval == interval,
+                    CandleRow.open_time == open_time,
+                )
+            )
+            if candle_id is None:
+                return False
+            count = session.scalar(
+                select(func.count())
+                .select_from(RoutedCandleRow)
+                .where(
+                    RoutedCandleRow.candle_id == candle_id,
+                    RoutedCandleRow.account_id.in_(account_ids),
+                    RoutedCandleRow.phase == "phase_one",
+                )
+            )
+            return count == len(account_ids)
+
+    def load_agent_call(self, request_key: str) -> dict[str, object] | None:
+        """Load only completed reusable outcomes; transient failures are never cached."""
+
+        with self._sessions() as session:
+            row = session.scalar(
+                select(AgentCallRow).where(AgentCallRow.request_key == request_key)
+            )
+            if row is None or row.result_json is None:
+                return None
+            return dict(row.result_json)
+
+    def save_agent_call(self, request_key: str, payload: dict[str, object]) -> UUID:
+        """Persist a sanitized agent outcome in its own short transaction."""
+
+        with self._sessions.begin() as session:
+            row = session.scalar(
+                select(AgentCallRow).where(AgentCallRow.request_key == request_key)
+            )
+            if row is None:
+                row = AgentCallRow(
+                    request_key=request_key,
+                    variant=str(payload["variant"]),
+                    candidate_key=str(payload["candidate_key"]),
+                    snapshot_digest=str(payload["snapshot_digest"]),
+                    target=str(payload["target"]),
+                    status=str(payload["status"]),
+                    trace_id=(
+                        str(payload["trace_id"]) if payload.get("trace_id") is not None else None
+                    ),
+                    result_json=payload,
+                )
+                session.add(row)
+                session.flush()
+            return row.id
 
     def candle_id(self, symbol: str, interval: str, open_time: datetime) -> UUID:
         """Return the durable natural-key candle identifier after an idempotent upsert."""

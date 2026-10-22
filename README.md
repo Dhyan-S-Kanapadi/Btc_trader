@@ -306,3 +306,89 @@ settings. Results are a sample, never a forecast; synthetic reports are explicit
 | `make lint` | Run Ruff lint and formatting checks. |
 | `make up` | Build and start the local Compose stack in the background. |
 | `make down` | Stop the local Compose stack. |
+
+## Agent operations control plane
+
+Issue #17 adds operator controls for agent-gated entry decisions only. They cannot change risk,
+position size, stops, exits, broker behavior, or account A. Missing controls fail closed: agents are
+off, shadows default on, kill switches are off, model/prompt versions are null, and cap assumptions
+are `0.10` per candidate and `1.00` per day. Caps are stored and exposed only; spend tracking is not
+implemented.
+
+The worker reads one immutable control snapshot per cycle. An unreadable control plane emits
+`control_plane_unreadable` and kills only agent-gated entries for that cycle; account A and exits
+continue. Shadow records the inner verdict with `shadow=true`, while the fixed `skip_all` fallback
+determines the actual result. Agent errors become `SKIP agent_error`.
+
+```powershell
+trader control seed
+trader control show
+trader control set global agent_enabled true --actor operator-name
+trader control set B shadow false --actor operator-name
+trader control kill B --actor operator-name
+```
+
+The CLI has strict typed, allowlisted updates. Each change and its self-reported actor are written
+atomically to an append-only PostgreSQL audit table; a PostgreSQL 16 trigger rejects audit updates
+and deletes. Offline replay accepts `--control path/to/control.json` and never reads DB controls.
+
+## Read-only agent tools
+
+`trader.agent_tools` provides evidence only; it cannot write, trade, change risk, or access exchange
+credentials. A candle is known at `as_of` only when `open_time + interval <= as_of`; equality is
+included. The harness binds `ToolRegistry(as_of=...)` to the candidate signal time. Model-facing
+schemas omit `as_of`, and an attempted supplied value is rejected. The API, HTTP source, and tool
+layer each enforce the boundary; a future candle is an `asof_violation`, never silently discarded.
+
+The tools return typed numbers, nulls with `insufficient_history`, and short labels only—never
+external free text. This is the prompt-injection posture. `volume_vs_average` compares the latest
+known volume to assumed 24-bar and 168-bar averages; the longer window supplements the snapshot's
+24-bar ratio. `higher_timeframe_trend` uses only complete UTC 4-hour or daily bars. `volatility_regime`
+uses the existing ATR with assumed 720-hour percentile bands (under 25% low, above 75% high).
+`recent_failed_breakouts` counts a breakout as failed only when a later known close is below its
+breakout level; incomplete confirmation windows are unresolved, not held. These defaults are
+assumptions, not validated strategy values.
+
+`GET /v1/candles` is read-only and returns ascending, known OHLCV candles with their derived close
+time and the request `as_of`; it has the existing API limit guard and synthetic metadata. Sources can
+be `InMemoryCandleSource` for local deterministic use or `HttpCandleSource` for the same read-only
+API. Calls log tool name, bound arguments, status, latency, fetched count, data-through, and an output
+digest without raw candle payloads. The API has no authentication today; #31/#34 must decide its
+deployment boundary before exposing it beyond a trusted network.
+
+## Agent client safety boundary
+
+Issue #21 keeps the investigator outside the stop/exit path. Each candle has a durable phase one
+(pending fills, exits, equity marks, and day rollover) before phase two evaluates a candidate policy.
+The worker persists phase one for every enabled account before a policy can invoke an agent; a restart
+resumes phase two rather than replaying an exit.
+
+The worker-side client supports local development, internal HTTP, and optional AgentCore targets. It
+fails closed to `SKIP`: killed/off gates make no request, and unavailable targets, timeouts, response
+mismatches, and invalid output cannot approve an entry. Returned verdicts are rechecked by the worker
+guardrail. Its in-memory circuit breaker resets on restart; the durable request cache remains the
+restart boundary.
+
+The internal HTTP service uses a shared `AGENT_SERVICE_TOKEN`; it is internal-service authentication,
+not end-user authentication, and still requires network isolation. It has body, allowlist, and
+concurrency limits. This plumbing does not claim that an agent improves trading results or profitability.
+
+## Optional LangSmith tracing
+
+Tracing is agent-service observation only and defaults to off (`TRADER_AGENT_TRACING__ENABLED=false`).
+It cannot affect a verdict, risk rule, order, exit, or worker circuit breaker. The worker generates a
+UUID v4 for each agent request; the service uses it as the optional root run id and returns it only after
+a trace actually starts. Shared calls are tagged with candidate, variant, model, prompt, source and
+synthetic status—never an account ID. Linked decision rows are the way to identify all accounts served
+by one trace.
+
+The agent SDK uses bounded background batching. No decision path flushes tracing; a process may perform
+a bounded shutdown flush. Inputs, outputs, metadata and errors are scrubbed for configured secret values,
+bearer/Authorization values and common key-shaped strings, then capped at 8 KiB per field. A trace outage
+is a rate-limited warning and the investigation continues untraced. `agent_calls` and decisions stay useful
+after trace retention expires. A run-id-only dashboard URL is not documented as portable: use the project
+dashboard and filter by run id until a workspace-specific URL template is configured.
+
+Tracing shows what the agent did, not whether it was right. Before raw news or Jev text is introduced,
+the payload and licensing policy must be reviewed again. Dataset export/evaluation labels remain future
+work; this issue deliberately does not claim they exist.

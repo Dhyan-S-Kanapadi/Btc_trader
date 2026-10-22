@@ -102,6 +102,10 @@ class DecisionRow(Base):
     model_version: Mapped[str | None] = mapped_column(String(128), nullable=True)
     prompt_version: Mapped[str | None] = mapped_column(String(128), nullable=True)
     trace_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    shadow: Mapped[bool] = mapped_column(default=False)
+    guardrail_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    agent_status: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    agent_call_id: Mapped[UUID | None] = mapped_column(nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
@@ -184,7 +188,26 @@ class RoutedCandleRow(Base):
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
     account_id: Mapped[str] = mapped_column(ForeignKey("accounts.account_id"))
     candle_id: Mapped[UUID] = mapped_column(ForeignKey("candles.id"))
+    phase: Mapped[str] = mapped_column(String(16), default="complete")
     reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class AgentCallRow(Base):
+    """Sanitized reusable outcome of one agent request; never contains credentials."""
+
+    __tablename__ = "agent_calls"
+    __table_args__ = (UniqueConstraint("request_key"),)
+
+    id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    request_key: Mapped[str] = mapped_column(String(128))
+    variant: Mapped[str] = mapped_column(String(64))
+    candidate_key: Mapped[str] = mapped_column(String(256))
+    snapshot_digest: Mapped[str] = mapped_column(String(128))
+    target: Mapped[str] = mapped_column(String(32))
+    status: Mapped[str] = mapped_column(String(64))
+    trace_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    result_json: Mapped[dict[str, object] | None] = mapped_column(JSON, nullable=True)
 
 
 class ConfigRow(Base):
@@ -212,3 +235,47 @@ class RunMetadataRow(Base):
     code_version: Mapped[str | None] = mapped_column(String(128), nullable=True)
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     metadata_json: Mapped[dict[str, object] | None] = mapped_column(JSON, nullable=True)
+
+
+class AgentGlobalControlRow(Base):
+    """The singleton operator-owned global agent gate."""
+
+    __tablename__ = "agent_global_controls"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    agent_enabled: Mapped[bool] = mapped_column(default=False)
+    kill_switch: Mapped[bool] = mapped_column(default=False)
+    model_version: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    prompt_version: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    per_candidate_cap: Mapped[Decimal] = mapped_column(MONEY)
+    per_day_cap: Mapped[Decimal] = mapped_column(MONEY)
+
+
+class AgentAccountControlRow(Base):
+    """Per-account gate without an account FK, so future accounts can be seeded first."""
+
+    __tablename__ = "agent_account_controls"
+
+    account_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    agent_enabled: Mapped[bool] = mapped_column(default=False)
+    shadow: Mapped[bool] = mapped_column(default=True)
+    kill_switch: Mapped[bool] = mapped_column(default=False)
+    per_candidate_cap: Mapped[Decimal | None] = mapped_column(MONEY, nullable=True)
+    per_day_cap: Mapped[Decimal | None] = mapped_column(MONEY, nullable=True)
+    fallback_policy: Mapped[str] = mapped_column(String(32), default="skip_all")
+
+
+class AgentControlAuditRow(Base):
+    """Append-only operator change record, protected by a database trigger."""
+
+    __tablename__ = "agent_control_audit"
+
+    id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
+    recorded_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    actor: Mapped[str] = mapped_column(String(256))
+    scope: Mapped[str] = mapped_column(String(64))
+    field: Mapped[str] = mapped_column(String(64))
+    old_value: Mapped[object | None] = mapped_column(JSON, nullable=True)
+    new_value: Mapped[object | None] = mapped_column(JSON, nullable=True)

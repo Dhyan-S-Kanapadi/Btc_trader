@@ -101,6 +101,75 @@ class ApiSettings(BaseModel):
     max_limit: int = Field(500, ge=1, le=500)
 
 
+class AgentToolsSettings(BaseModel):
+    """Read-only evidence-tool assumptions; none are trading or model controls."""
+
+    api_base_url: str = "http://localhost:8000"
+    timeout_seconds: float = Field(5, gt=0)
+    max_retries: int = Field(1, ge=0, le=3)
+    max_candles_per_call: int = Field(1000, ge=1, le=5000)
+    max_calls_per_registry: int = Field(20, ge=1, le=100)
+    volume_lookback_bars: int = Field(24, gt=0)
+    volume_long_lookback_bars: int = Field(168, gt=0)
+    volatility_window_bars: int = Field(720, gt=0)
+    failed_breakout_confirm_bars: int = Field(6, gt=0)
+    trend_flat_band: Decimal = Field(Decimal("0.001"), ge=0)
+
+
+class GuardrailSettings(BaseModel):
+    """Fail-closed output validation assumptions, not trading parameters."""
+
+    max_raw_bytes: int = Field(4096, gt=0)
+    max_depth: int = Field(12, gt=0)
+    max_reasons: int = Field(5, gt=0)
+    max_reason_length: int = Field(240, gt=0)
+    max_reason_total: int = Field(800, gt=0)
+    min_citations: int = Field(1, gt=0)
+    min_citations_take: int = Field(2, gt=0)
+    max_citations: int = Field(12, gt=0)
+
+
+class AgentSettings(BaseModel):
+    """Pinned investigator plumbing caps; these do not grant trading authority."""
+
+    model_id: str | None = None
+    prompt_version: str = "investigator_v1"
+    step_cap: int = Field(3, gt=0)
+    max_tokens_per_call: int = Field(512, gt=0)
+    max_total_tokens: int = Field(1024, gt=0)
+    wall_clock_seconds: float = Field(15, gt=0)
+    checkpoint_database_url: str | None = Field(
+        default=None, validation_alias="AGENT_CHECKPOINT_DATABASE_URL"
+    )
+
+
+class AgentTracingSettings(BaseModel):
+    """Opt-in agent-only observation settings; defaults are operational assumptions."""
+
+    enabled: bool = False
+    project_name: str = "btc-paper-agent-live"
+    endpoint: str = "https://api.smith.langchain.com"
+    timeout_seconds: float = Field(2, gt=0, le=10)
+    max_retries: int = Field(0, ge=0, le=1)
+    payload_cap: int = Field(8192, ge=256, le=65536)
+    flush_timeout_seconds: float = Field(2, gt=0, le=10)
+    dataset_prefix: str = "btc-paper-agent-failures"
+
+
+class AgentClientSettings(BaseModel):
+    """Worker-side safety bounds; defaults are conservative operational assumptions."""
+
+    target: str = Field("local", pattern="^(local|http|agentcore)$")
+    service_url: str | None = None
+    service_token: str | None = Field(default=None, validation_alias="AGENT_SERVICE_TOKEN")
+    total_deadline_seconds: float = Field(10, gt=0, le=60)
+    connect_timeout_seconds: float = Field(2, gt=0, le=30)
+    max_retries: int = Field(1, ge=0, le=1)
+    breaker_failure_threshold: int = Field(3, ge=1)
+    breaker_cooldown_seconds: float = Field(300, gt=0)
+    cycle_budget_seconds: float = Field(20, gt=0)
+
+
 class Settings(BaseSettings):
     """All configuration sourced from environment variables or explicit test inputs."""
 
@@ -127,6 +196,11 @@ class Settings(BaseSettings):
     api: ApiSettings = Field(
         default_factory=ApiSettings, description="Read-only API settings section."
     )
+    agent_tools: AgentToolsSettings = Field(default_factory=AgentToolsSettings)
+    guardrail: GuardrailSettings = Field(default_factory=GuardrailSettings)
+    agent: AgentSettings = Field(default_factory=AgentSettings)
+    agent_tracing: AgentTracingSettings = Field(default_factory=AgentTracingSettings)
+    agent_client: AgentClientSettings = Field(default_factory=AgentClientSettings)
     database_url: str | None = Field(
         default=None,
         validation_alias="DATABASE_URL",

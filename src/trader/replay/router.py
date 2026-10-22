@@ -8,6 +8,7 @@ from decimal import Decimal
 from pydantic import Field
 
 from trader.config import Settings
+from trader.control import ControlConfig, GatedPolicy, resolve_agent_gate
 from trader.db.storage import PostgresStorage
 from trader.models import Candle, FrozenModel
 from trader.risk import AccountState
@@ -15,13 +16,15 @@ from trader.strategy import build_snapshot, evaluate_candle
 
 from .engine import (
     DecisionPolicy,
+    PhaseOneResult,
     PolicyDecision,
     ReplayState,
     SharedSignal,
     StepResult,
     TakeAllPolicy,
     VolumeFilterPolicy,
-    step,
+    phase_one,
+    phase_two,
 )
 from .runner import ReplayResult
 
@@ -65,8 +68,58 @@ def route_candle(
     settings: Settings,
     data_is_stale: bool = False,
     allow_entries: bool = True,
+    control: ControlConfig | None = None,
+    policies: Mapping[str, DecisionPolicy] | None = None,
 ) -> dict[str, StepResult]:
     """Route one closed candle independently, sharing exactly one candidate and snapshot."""
+
+    phase_one_results = route_candle_phase_one(accounts, history, candle, settings, data_is_stale)
+    return route_candle_phase_two(
+        accounts,
+        history,
+        candle,
+        settings,
+        phase_one_results,
+        data_is_stale,
+        allow_entries,
+        control,
+        policies,
+    )
+
+
+def route_candle_phase_one(
+    accounts: Mapping[str, tuple[ReplayState, AccountConfig]],
+    history: Sequence[Candle],
+    candle: Candle,
+    settings: Settings,
+    data_is_stale: bool = False,
+) -> dict[str, PhaseOneResult]:
+    """Process agent-free account transitions before any candidate policy runs."""
+
+    results: dict[str, PhaseOneResult] = {}
+    logger = logging.getLogger("trader.replay.router")
+    for account_id, (state, account) in accounts.items():
+        if not account.enabled:
+            continue
+        try:
+            results[account_id] = phase_one(state, history, candle, settings, data_is_stale)
+        except Exception:
+            logger.exception("account phase one failed", extra={"account_id": account_id})
+    return results
+
+
+def route_candle_phase_two(
+    accounts: Mapping[str, tuple[ReplayState, AccountConfig]],
+    history: Sequence[Candle],
+    candle: Candle,
+    settings: Settings,
+    phase_one_results: Mapping[str, PhaseOneResult],
+    data_is_stale: bool = False,
+    allow_entries: bool = True,
+    control: ControlConfig | None = None,
+    policies: Mapping[str, DecisionPolicy] | None = None,
+) -> dict[str, StepResult]:
+    """Evaluate entry policies only after callers have persisted phase one."""
 
     candidate = evaluate_candle(history, len(history) - 1, settings.strategy)
     signal = (
@@ -78,15 +131,26 @@ def route_candle(
     )
     results: dict[str, StepResult] = {}
     logger = logging.getLogger("trader.replay.router")
-    for account_id, (state, account) in accounts.items():
-        if not account.enabled:
+    for account_id, (_state, account) in accounts.items():
+        phase = phase_one_results.get(account_id)
+        if phase is None:
             continue
         try:
-            results[account_id] = step(
-                state,
+            policy = (
+                policies.get(account_id)
+                if policies is not None
+                else policy_for(account.policy_name, settings)
+            )
+            if policy is None:
+                raise ValueError(f"missing policy for account: {account_id}")
+            if account_id != "A" and control is not None:
+                gate = resolve_agent_gate(control, account_id)
+                policy = GatedPolicy(gate, policy, SkipAllPolicy())
+            results[account_id] = phase_two(
+                phase,
                 history,
                 candle,
-                policy_for(account.policy_name, settings),
+                policy,
                 settings,
                 signal,
                 data_is_stale,
@@ -102,6 +166,7 @@ def run_routed_replay(
     accounts: Mapping[str, tuple[ReplayState, AccountConfig]],
     settings: Settings,
     on_candle: Callable[[Candle, Mapping[str, StepResult]], None] | None = None,
+    control: ControlConfig | None = None,
 ) -> dict[str, ReplayResult]:
     """Replay one shared candle stream through independent account states and policies."""
 
@@ -118,7 +183,11 @@ def run_routed_replay(
     )
     for index, candle in enumerate(candles):
         results = route_candle(
-            states, candles[max(0, index - bounded + 1) : index + 1], candle, settings
+            states,
+            candles[max(0, index - bounded + 1) : index + 1],
+            candle,
+            settings,
+            control=control,
         )
         if on_candle is not None:
             on_candle(candle, results)
