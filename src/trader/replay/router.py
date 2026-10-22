@@ -73,9 +73,7 @@ def route_candle(
 ) -> dict[str, StepResult]:
     """Route one closed candle independently, sharing exactly one candidate and snapshot."""
 
-    phase_one_results = route_candle_phase_one(
-        accounts, history, candle, settings, data_is_stale
-    )
+    phase_one_results = route_candle_phase_one(accounts, history, candle, settings, data_is_stale)
     return route_candle_phase_two(
         accounts,
         history,
