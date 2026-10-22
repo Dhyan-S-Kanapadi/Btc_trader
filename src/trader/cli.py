@@ -170,7 +170,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         for account_id, policy_name, variant in (
             ("A", "take_all", "base"),
             ("B", "agent_veto", "base"),
-            ("C", "skip_all", "jev"),
+            ("C", "agent_veto", "jev"),
             ("D", "agent_veto", "memory"),
         ):
             storage.seed_account(
@@ -186,7 +186,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     "risk": settings.risk.model_dump(mode="json"),
                 },
             )
-            if account_id in {"B", "D"}:
+            if account_id in {"B", "C", "D"}:
                 storage.promote_placeholder_policy(
                     account_id, policy_name, variant, getpass.getuser()
                 )
@@ -489,9 +489,11 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if args.command == "worker":
         from trader.config import Settings
+        from trader.variant_runtime import VariantEvidenceProvider
         from trader.worker import run_worker
 
-        return run_worker(Settings())
+        settings = Settings()
+        return run_worker(settings, evidence_provider=VariantEvidenceProvider(settings))
 
     if args.command == "api":
         from trader.api import run_api

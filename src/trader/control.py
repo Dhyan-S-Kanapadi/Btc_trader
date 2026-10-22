@@ -57,6 +57,13 @@ class AgentGate(FrozenModel):
     fallback_policy: Literal["skip_all"] = "skip_all"
 
 
+class EvidenceGate(FrozenModel):
+    """Separate, fail-closed permission for optional per-variant evidence."""
+
+    jev: bool = False
+    memory: bool = False
+
+
 def resolve_agent_gate(control: ControlConfig | None, account_id: str) -> AgentGate:
     """Resolve an account gate; absent or unreadable input is always non-live."""
 
@@ -75,6 +82,23 @@ def resolve_agent_gate(control: ControlConfig | None, account_id: str) -> AgentG
         per_candidate_cap=account.per_candidate_cap or global_control.per_candidate_cap,
         per_day_cap=account.per_day_cap or global_control.per_day_cap,
         fallback_policy=account.fallback_policy,
+    )
+
+
+def resolve_evidence_gate(
+    control: ControlConfig | None, account_id: str, variant: str
+) -> EvidenceGate:
+    """Evidence is spend-capable, so it follows the agent gate and variant exactly."""
+
+    gate = resolve_agent_gate(control, account_id)
+    if gate.killed or gate.mode == "off" or control is None or not control.readable:
+        return EvidenceGate()
+    account = control.accounts.get(account_id)
+    if account is None:
+        return EvidenceGate()
+    return EvidenceGate(
+        jev=variant == "jev" and control.global_control.jev_enabled and account.jev_enabled,
+        memory=variant == "memory" and account.memory_enabled,
     )
 
 

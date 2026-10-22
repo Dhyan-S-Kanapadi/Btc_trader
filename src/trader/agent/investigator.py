@@ -64,14 +64,16 @@ def investigate(
     tracing_config: AgentTracingSettings | None = None,
     memory_source: MemorySource | None = None,
     variant: str = "base",
+    runtime_settings: Settings | None = None,
 ) -> InvestigationResult:
     """Run the bounded plumbing; any bad model/tool/checkpoint outcome becomes guardrailed SKIP."""
     started = time.monotonic()
     thread_id = hashlib.sha256(snapshot.model_dump_json().encode()).hexdigest()
     prompt = _prompt(config.prompt_version)
-    guard_config = Settings().guardrail
+    runtime = runtime_settings or Settings()
+    guard_config = runtime.guardrail
     tracing = InvestigationTrace(
-        tracing_config or Settings().agent_tracing,
+        tracing_config or runtime.agent_tracing,
         run_id=trace_run_id,
         inputs={"snapshot": snapshot.model_dump(mode="json")},
         tags=[
@@ -119,7 +121,7 @@ def investigate(
     registry = ToolRegistry(
         snapshot.signal_time,
         tool_source,
-        Settings(),
+        runtime,
         snapshot=snapshot,
         variant=variant,
         memory_source=memory_source,
