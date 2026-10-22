@@ -231,7 +231,12 @@ pending-position restart serialization when live-worker recovery is introduced.
 Issue #11 adds four independent paper accounts, `A` through `D`, sharing each closed candle,
 candidate, and evidence snapshot while keeping cash, positions, risk limits, and decisions separate.
 `trader seed-accounts` creates the idempotent local defaults: `A` uses `take_all`; `B`, `C`, and
-`D` use `skip_all` with the exact reason `agent not wired yet (#27)`. Each account has an editable,
+`D` use agent-veto account configurations after Issue #27, while C remains on `skip_all` because the
+governing Jev decision is still forward-test-only. B is `base`; D is `memory`; unknown variants fail
+fast when the database config is loaded. `trader seed-accounts` promotes only an unchanged `skip_all`
+placeholder and appends an audit record, never overwriting an operator-selected policy. Safe defaults
+remain agent off and shadow on, so this plumbing does not make a model, Jev, or memory call by itself.
+Each account has an editable,
 non-secret `configs` JSON document containing `account_id`, `label`, `policy_name`,
 `starting_equity`, and `enabled`; an unknown policy or malformed configuration fails before replay.
 

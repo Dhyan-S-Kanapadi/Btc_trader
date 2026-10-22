@@ -79,7 +79,9 @@ class CycleResult:
     agent_gates: dict[str, str]
 
 
-def run_cycle(storage: PostgresStorage, accounts, settings: Settings, now: datetime) -> CycleResult:
+def run_cycle(
+    storage: PostgresStorage, accounts, settings: Settings, now: datetime, agent_client=None
+) -> CycleResult:
     """Fetch closed public candles, then route unpersisted candles in chronological order."""
 
     try:
@@ -139,6 +141,17 @@ def run_cycle(storage: PostgresStorage, accounts, settings: Settings, now: datet
             )
             for account_id, result in phase_one.items():
                 accounts[account_id] = (result.state, accounts[account_id][1])
+        policies = None
+        if agent_client is not None:
+            from trader.agent_client import AgentVetoPolicy
+
+            policies = {
+                account_id: AgentVetoPolicy(
+                    agent_client, resolve_agent_gate(control, account_id), account.variant
+                )
+                for account_id, (_state, account) in accounts.items()
+                if account_id != "A" and account.policy_name == "agent_veto"
+            }
         results = route_candle_phase_two(
             accounts,
             history,
@@ -148,6 +161,7 @@ def run_cycle(storage: PostgresStorage, accounts, settings: Settings, now: datet
             freshness.stale,
             allow_entries=not catchup,
             control=control,
+            policies=policies,
         )
         storage.persist_routed_candle(
             settings.strategy.interval,
@@ -187,6 +201,30 @@ def run_worker(settings: Settings, clock: Clock | None = None) -> int:
     configure_logging()
     logger = logging.getLogger("trader.worker")
     storage = PostgresStorage(settings.database_url)
+    from trader.agent_client import (
+        AgentClient,
+        AgentCoreTarget,
+        HttpTarget,
+        InMemoryResultCache,
+        LocalTarget,
+    )
+
+    target = (
+        HttpTarget(
+            settings.agent_client.service_url or "",
+            settings.agent_client.service_token,
+            settings.agent_client.connect_timeout_seconds,
+        )
+        if settings.agent_client.target == "http"
+        else AgentCoreTarget(settings.agent_client.service_url or "")
+        if settings.agent_client.target == "agentcore"
+        else LocalTarget()
+    )
+    agent_client = AgentClient(
+        target,
+        deadline_seconds=settings.agent_client.total_deadline_seconds,
+        cache=InMemoryResultCache(),
+    )
     clock = clock or RealClock()
     lock = WorkerLock(storage, settings.worker.lock_key)
     if not lock.acquire():
@@ -246,7 +284,7 @@ def run_worker(settings: Settings, clock: Clock | None = None) -> int:
                     storage, settings.strategy.symbol, settings.strategy.interval, start, now, now
                 )
                 started = clock.now()
-                cycle = run_cycle(storage, accounts, settings, now)
+                cycle = run_cycle(storage, accounts, settings, now, agent_client)
                 logger.info(
                     "worker heartbeat",
                     extra={

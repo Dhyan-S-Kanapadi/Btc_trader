@@ -37,6 +37,12 @@ def test_resolver_is_fail_closed_and_kill_precedes_enablement() -> None:
     assert resolve_agent_gate(control, "C").mode == "off"
 
 
+def test_evidence_switches_default_off() -> None:
+    control = ControlConfig()
+    assert not control.global_control.jev_enabled
+    assert not AccountControl(account_id="D").memory_enabled
+
+
 def test_shadow_records_inner_verdict_but_uses_skip_fallback() -> None:
     snapshot, candidate = _inputs()
     control = ControlConfig(

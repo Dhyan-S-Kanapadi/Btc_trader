@@ -4,6 +4,7 @@ import logging
 from collections.abc import Callable, Mapping, Sequence
 from datetime import date
 from decimal import Decimal
+from typing import Literal
 
 from pydantic import Field
 
@@ -37,6 +38,7 @@ class AccountConfig(FrozenModel):
     policy_name: str = Field(min_length=1)
     starting_equity: Decimal = Field(gt=0)
     enabled: bool = True
+    variant: Literal["base", "jev", "memory"] = "base"
     risk: dict[str, object] = Field(default_factory=dict)
 
 
@@ -47,12 +49,20 @@ class SkipAllPolicy:
         return PolicyDecision(action="SKIP", reason="agent not wired yet (#27)")
 
 
+class AgentUnavailablePolicy:
+    """Fail closed when replay has no explicitly supplied #21 client policy."""
+
+    def decide(self, snapshot, candidate) -> PolicyDecision:
+        return PolicyDecision(action="SKIP", reason="agent_unavailable")
+
+
 def policy_for(name: str, settings: Settings) -> DecisionPolicy:
     """Return a configured policy or fail fast while loading account configuration."""
 
     policies: dict[str, DecisionPolicy] = {
         "take_all": TakeAllPolicy(),
         "skip_all": SkipAllPolicy(),
+        "agent_veto": AgentUnavailablePolicy(),
         "volume_filter": VolumeFilterPolicy(settings.strategy.volume_ratio_min),
     }
     try:

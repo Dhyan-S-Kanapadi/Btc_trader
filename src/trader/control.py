@@ -22,6 +22,7 @@ DEFAULT_PER_DAY_CAP = Decimal("1.00")
 class GlobalControl(FrozenModel):
     agent_enabled: bool = False
     kill_switch: bool = False
+    jev_enabled: bool = False
     model_version: str | None = None
     prompt_version: str | None = None
     per_candidate_cap: Decimal = Field(default=DEFAULT_PER_CANDIDATE_CAP, ge=0)
@@ -33,6 +34,8 @@ class AccountControl(FrozenModel):
     agent_enabled: bool = False
     shadow: bool = True
     kill_switch: bool = False
+    memory_enabled: bool = False
+    jev_enabled: bool = False
     per_candidate_cap: Decimal | None = Field(default=None, ge=0)
     per_day_cap: Decimal | None = Field(default=None, ge=0)
     fallback_policy: Literal["skip_all"] = "skip_all"
