@@ -71,3 +71,35 @@ variable "budget_alert_email" {
     error_message = "budget_alert_email must be a valid email address."
   }
 }
+
+variable "app_image_tag" {
+  description = "Immutable ECR image tag produced by CI; required before ECS tasks can be deployed."
+  type        = string
+
+  validation {
+    condition     = length(trimspace(var.app_image_tag)) > 0
+    error_message = "app_image_tag must name an immutable image produced by CI."
+  }
+}
+
+variable "api_ingress_cidrs" {
+  description = "CIDRs allowed to reach the read-only API load balancer; public access is an assumption until the dashboard is deployed."
+  type        = list(string)
+  default     = ["0.0.0.0/0"]
+
+  validation {
+    condition     = alltrue([for cidr in var.api_ingress_cidrs : can(cidrhost(cidr, 0))])
+    error_message = "api_ingress_cidrs must contain valid CIDR blocks."
+  }
+}
+
+variable "log_retention_days" {
+  description = "CloudWatch application-log retention; 30 days is an operational assumption."
+  type        = number
+  default     = 30
+
+  validation {
+    condition     = contains([1, 3, 5, 7, 14, 30, 60, 90, 120, 150, 180, 365], var.log_retention_days)
+    error_message = "log_retention_days must be a supported CloudWatch retention value."
+  }
+}

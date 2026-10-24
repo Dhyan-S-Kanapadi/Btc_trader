@@ -36,3 +36,26 @@ output "iam_role_arns" {
     agent  = aws_iam_role.agent.arn
   }
 }
+
+output "ecs_cluster_name" {
+  description = "ECS cluster containing the paper-only worker and read-only API services."
+  value       = aws_ecs_cluster.main.name
+}
+
+output "migration_task_definition_arn" {
+  description = "Run this one-off Fargate task before starting the worker service."
+  value       = aws_ecs_task_definition.migrate.arn
+}
+
+output "ecs_private_network" {
+  description = "Private network values for the one-off migration Fargate task."
+  value = {
+    subnet_ids               = aws_subnet.private[*].id
+    worker_security_group_id = aws_security_group.app["worker"].id
+  }
+}
+
+output "api_url" {
+  description = "Read-only HTTP API URL; place it behind HTTPS in the dashboard deployment."
+  value       = "http://${aws_lb.api.dns_name}"
+}
