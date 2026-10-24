@@ -1,0 +1,10 @@
+FROM python:3.12-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1
+WORKDIR /app
+RUN groupadd --system trader && useradd --system --gid trader --create-home trader
+COPY . .
+RUN python -m pip install ".[agent]"
+USER trader
+EXPOSE 8080
+CMD ["uvicorn", "trader.agent_runtime:create_agentcore_app", "--factory", "--host", "0.0.0.0", "--port", "8080"]

@@ -140,6 +140,16 @@ resource "aws_security_group" "app" {
   tags = { Name = "${local.name}-${each.key}" }
 }
 
+# shortcut: the API is HTTP until Issue #33 adds TLS; remove this rule when its HTTPS endpoint exists.
+resource "aws_vpc_security_group_egress_rule" "agent_api_http" {
+  security_group_id = aws_security_group.app["agent"].id
+  cidr_ipv4         = "0.0.0.0/0"
+  from_port         = 80
+  to_port           = 80
+  ip_protocol       = "tcp"
+  description       = "Temporary read-only API HTTP egress for AgentCore evidence tools."
+}
+
 resource "aws_vpc_security_group_ingress_rule" "rds_postgres" {
   for_each = aws_security_group.app
 
@@ -283,9 +293,7 @@ data "aws_iam_policy_document" "agent_secrets" {
   statement {
     actions = ["secretsmanager:GetSecretValue"]
     resources = [
-      aws_secretsmanager_secret.database_url.arn,
       aws_secretsmanager_secret.groq_api_key.arn,
-      aws_secretsmanager_secret.agent_service_token.arn,
     ]
   }
 }
@@ -294,6 +302,24 @@ resource "aws_iam_role_policy" "agent_secrets" {
   name   = "read-required-secrets"
   role   = aws_iam_role.agent.id
   policy = data.aws_iam_policy_document.agent_secrets.json
+}
+
+data "aws_iam_policy_document" "agent_runtime_ecr" {
+  statement {
+    actions   = ["ecr:GetAuthorizationToken"]
+    resources = ["*"]
+  }
+
+  statement {
+    actions   = ["ecr:BatchGetImage", "ecr:GetDownloadUrlForLayer"]
+    resources = [aws_ecr_repository.app.arn]
+  }
+}
+
+resource "aws_iam_role_policy" "agent_runtime_ecr" {
+  name   = "pull-agent-runtime-image"
+  role   = aws_iam_role.agent.id
+  policy = data.aws_iam_policy_document.agent_runtime_ecr.json
 }
 
 resource "aws_budgets_budget" "monthly" {

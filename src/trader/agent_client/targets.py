@@ -94,14 +94,24 @@ class AgentCoreTarget:
             client = self._client
             if client is None:
                 import boto3
+                from botocore.config import Config
 
-                client = boto3.client("bedrock-agentcore")
+                client = boto3.client(
+                    "bedrock-agentcore",
+                    config=Config(
+                        connect_timeout=min(timeout_seconds, 2),
+                        read_timeout=timeout_seconds,
+                        retries={"max_attempts": 0},
+                    ),
+                )
             response = client.invoke_agent_runtime(
                 agentRuntimeArn=self.runtime_arn,
                 runtimeSessionId=str(uuid.uuid4()),
                 payload=json.dumps(dict(request)).encode(),
             )
-            parsed = json.loads(response["response"].read())
+            stream = response["response"]
+            raw = stream.read() if hasattr(stream, "read") else b"".join(stream)
+            parsed = json.loads(raw)
         except ImportError as error:
             raise AgentUnavailable("AgentCore optional dependency is unavailable") from error
         except Exception as error:

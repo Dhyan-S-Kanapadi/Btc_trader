@@ -4,6 +4,7 @@ from datetime import UTC, datetime
 from decimal import Decimal
 
 from trader.agent_client import AgentClient, AgentVetoPolicy, CircuitBreaker, InMemoryResultCache
+from trader.agent_client.targets import AgentCoreTarget
 from trader.control import AgentGate
 from trader.models import Candidate, Snapshot
 
@@ -122,3 +123,18 @@ def test_jev_variant_enriches_only_its_own_request_snapshot() -> None:
     )
     assert target.calls == 1
     assert target.last_request["snapshot"]["jev_status"] == "coverage_not_ok"
+
+
+def test_agentcore_target_consumes_the_documented_json_stream() -> None:
+    class Runtime:
+        def __init__(self) -> None:
+            self.kwargs = None
+
+        def invoke_agent_runtime(self, **kwargs):
+            self.kwargs = kwargs
+            return {"response": [b'{"ok":', b"true}"]}
+
+    runtime = Runtime()
+    result = AgentCoreTarget("arn:runtime", client=runtime).investigate({"x": 1}, 3)
+    assert result == {"ok": True}
+    assert runtime.kwargs["agentRuntimeArn"] == "arn:runtime"

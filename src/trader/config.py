@@ -186,6 +186,8 @@ class AgentSettings(BaseModel):
     checkpoint_database_url: str | None = Field(
         default=None, validation_alias="AGENT_CHECKPOINT_DATABASE_URL"
     )
+    groq_model: str = "openai/gpt-oss-20b"
+    groq_timeout_seconds: float = Field(10, gt=0, le=60)
 
 
 class AgentTracingSettings(BaseModel):
@@ -274,6 +276,9 @@ class Settings(BaseSettings):
     jev: JevSettings = Field(default_factory=JevSettings)
     gateway_token: str | None = Field(
         default=None, validation_alias="AI_GATEWAY_API_KEY", exclude=True, repr=False
+    )
+    groq_token: str | None = Field(
+        default=None, validation_alias="GROQ_API_KEY", exclude=True, repr=False
     )
     agent: AgentSettings = Field(default_factory=AgentSettings)
     agent_tracing: AgentTracingSettings = Field(default_factory=AgentTracingSettings)

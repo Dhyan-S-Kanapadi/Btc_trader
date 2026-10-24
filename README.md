@@ -419,6 +419,26 @@ The internal HTTP service uses a shared `AGENT_SERVICE_TOKEN`; it is internal-se
 not end-user authentication, and still requires network isolation. It has body, allowlist, and
 concurrency limits. This plumbing does not claim that an agent improves trading results or profitability.
 
+## AgentCore Runtime with Groq
+
+Issue #34 packages the existing isolated investigator as `Dockerfile.agent`. AgentCore calls its
+`GET /ping` and `POST /invocations` contract; the runtime uses the existing read-only candle API,
+the existing time-gated memory reader for D only, and Groq's OpenAI-compatible chat-completions API.
+The runtime receives the Groq secret ARN as configuration and fetches its value only with its own
+least-privilege role. It never uses a Bedrock foundation model.
+
+Build and push `Dockerfile.agent` under an immutable ECR tag, then supply both `app_image_tag` and
+`agent_image_tag` to Terraform. Terraform creates the VPC-attached runtime and prints
+`agentcore_runtime_arn`; configure that ARN as `TRADER_AGENT_CLIENT__SERVICE_URL` and set
+`TRADER_AGENT_CLIENT__TARGET=agentcore` for the worker. The runtime needs private-subnet NAT egress
+to reach Groq. Until Issue #33 adds HTTPS to the read-only API, it has a deliberately temporary
+port-80 egress rule for evidence calls.
+
+All agent controls remain off by default. A missing Groq key, runtime error, timeout, malformed
+response, or guardrail rejection becomes `SKIP` for B–D; Account A never invokes this path. Model
+token limits and the worker deadline are bounded assumptions, not cost accounting or a claim that
+news, an LLM, or the agent predicts returns.
+
 ## Optional LangSmith tracing
 
 Tracing is agent-service observation only and defaults to off (`TRADER_AGENT_TRACING__ENABLED=false`).
