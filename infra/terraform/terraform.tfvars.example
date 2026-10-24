@@ -4,3 +4,6 @@ budget_alert_email = "you@example.com"
 
 # Every default is an assumption, including this USD amount.
 monthly_budget_usd = 50
+
+# Immutable tag emitted by CI after it builds and pushes the Docker image to ECR.
+# app_image_tag = "replace-with-ci-image-tag"

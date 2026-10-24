@@ -279,20 +279,6 @@ resource "aws_iam_role" "agent" {
   assume_role_policy = data.aws_iam_policy_document.agent_assume.json
 }
 
-data "aws_iam_policy_document" "worker_secrets" {
-  statement {
-    actions   = ["secretsmanager:GetSecretValue"]
-    resources = [aws_secretsmanager_secret.database_url.arn, aws_secretsmanager_secret.agent_service_token.arn]
-  }
-}
-
-data "aws_iam_policy_document" "api_secrets" {
-  statement {
-    actions   = ["secretsmanager:GetSecretValue"]
-    resources = [aws_secretsmanager_secret.api_database_url.arn]
-  }
-}
-
 data "aws_iam_policy_document" "agent_secrets" {
   statement {
     actions = ["secretsmanager:GetSecretValue"]
@@ -302,18 +288,6 @@ data "aws_iam_policy_document" "agent_secrets" {
       aws_secretsmanager_secret.agent_service_token.arn,
     ]
   }
-}
-
-resource "aws_iam_role_policy" "worker_secrets" {
-  name   = "read-required-secrets"
-  role   = aws_iam_role.worker.id
-  policy = data.aws_iam_policy_document.worker_secrets.json
-}
-
-resource "aws_iam_role_policy" "api_secrets" {
-  name   = "read-required-secrets"
-  role   = aws_iam_role.api.id
-  policy = data.aws_iam_policy_document.api_secrets.json
 }
 
 resource "aws_iam_role_policy" "agent_secrets" {
