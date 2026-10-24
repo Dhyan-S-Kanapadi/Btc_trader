@@ -14,3 +14,7 @@ frontend/node_modules/
 frontend/dist/
 frontend/.vitest/
 frontend/*.tsbuildinfo
+infra/terraform/.terraform/
+infra/terraform/*.tfstate
+infra/terraform/*.tfstate.*
+infra/terraform/*.tfvars

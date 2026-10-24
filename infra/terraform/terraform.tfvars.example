@@ -1,0 +1,6 @@
+# Copy this to terraform.tfvars locally. It is git-ignored.
+# This email receives the 80% forecast and 100% actual cost alerts.
+budget_alert_email = "you@example.com"
+
+# Every default is an assumption, including this USD amount.
+monthly_budget_usd = 50
