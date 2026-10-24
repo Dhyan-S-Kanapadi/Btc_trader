@@ -92,5 +92,12 @@ def test_versioned_templates_match_the_checked_in_manifest() -> None:
     root = files("trader.jev.templates")
     manifest = json.loads(root.joinpath("manifest.json").read_text(encoding="utf-8"))
     assert {
-        name: sha256(root.joinpath(name).read_bytes()).hexdigest() for name in manifest
+        name: sha256(
+            root.joinpath(name)
+            .read_text(encoding="utf-8")
+            .replace("\r\n", "\n")
+            .replace("\r", "\n")
+            .encode()
+        ).hexdigest()
+        for name in manifest
     } == manifest
