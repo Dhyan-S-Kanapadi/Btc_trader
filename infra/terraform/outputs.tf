@@ -42,6 +42,11 @@ output "ecs_cluster_name" {
   value       = aws_ecs_cluster.main.name
 }
 
+output "agentcore_runtime_arn" {
+  description = "AgentCore investigator runtime ARN; configure TRADER_AGENT_CLIENT__SERVICE_URL with it after apply."
+  value       = aws_bedrockagentcore_agent_runtime.investigator.agent_runtime_arn
+}
+
 output "migration_task_definition_arn" {
   description = "Run this one-off Fargate task before starting the worker service."
   value       = aws_ecs_task_definition.migrate.arn

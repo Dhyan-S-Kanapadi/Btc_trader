@@ -130,6 +130,9 @@ def investigate(
         for step in range(1, config.step_cap + 1):
             if time.monotonic() - started > config.wall_clock_seconds:
                 return result("deadline", {}, step - 1)
+            set_tool_results = getattr(model, "set_tool_results", None)
+            if callable(set_tool_results):
+                set_tool_results(registry.records)
             response = model.invoke(prompt[0], snapshot, registry.schemas())
             if isinstance(response, dict) and "tool" in response:
                 registry.call(str(response["tool"]), dict(response.get("args", {})))

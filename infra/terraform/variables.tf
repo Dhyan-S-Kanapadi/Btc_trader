@@ -82,6 +82,22 @@ variable "app_image_tag" {
   }
 }
 
+variable "agent_image_tag" {
+  description = "Immutable AgentCore runtime image tag produced from Dockerfile.agent; required before deployment."
+  type        = string
+
+  validation {
+    condition     = length(trimspace(var.agent_image_tag)) > 0
+    error_message = "agent_image_tag must name an immutable AgentCore image produced by CI."
+  }
+}
+
+variable "groq_model" {
+  description = "Groq model identifier for the investigator; this is an operational assumption, not a trading parameter."
+  type        = string
+  default     = "openai/gpt-oss-20b"
+}
+
 variable "api_ingress_cidrs" {
   description = "CIDRs allowed to reach the read-only API load balancer; public access is an assumption until the dashboard is deployed."
   type        = list(string)

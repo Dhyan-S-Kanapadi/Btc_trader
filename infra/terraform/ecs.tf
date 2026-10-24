@@ -141,6 +141,10 @@ resource "aws_ecs_task_definition" "worker" {
     image     = local.app_image
     essential = true
     command   = ["worker"]
+    environment = [
+      { name = "TRADER_AGENT_CLIENT__TARGET", value = "agentcore" },
+      { name = "TRADER_AGENT_CLIENT__SERVICE_URL", value = aws_bedrockagentcore_agent_runtime.investigator.agent_runtime_arn },
+    ]
     secrets = [{ name = "DATABASE_URL", valueFrom = aws_secretsmanager_secret.database_url.arn }]
     healthCheck = {
       command     = ["CMD-SHELL", "python -c \"import os, psycopg; psycopg.connect(os.environ['DATABASE_URL'].replace('postgresql+psycopg://', 'postgresql://', 1)).close()\""]
