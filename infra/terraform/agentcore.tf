@@ -3,7 +3,7 @@ locals {
 }
 
 resource "aws_bedrockagentcore_agent_runtime" "investigator" {
-  agent_runtime_name = "${local.name}-investigator"
+  agent_runtime_name = "${replace(local.name, "-", "_")}_investigator"
   description        = "Paper-trading investigator: read-only evidence and Groq vetoes only."
   role_arn           = aws_iam_role.agent.arn
 
