@@ -120,24 +120,31 @@ resource "aws_security_group" "app" {
   name        = "${local.name}-${each.key}"
   description = "No inbound access; outbound DNS, HTTPS, and PostgreSQL only."
   vpc_id      = aws_vpc.main.id
-
-  egress {
-    description = "HTTPS to public market data, Groq, and AWS APIs."
-    from_port   = 443
-    to_port     = 443
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
-  egress {
-    description = "DNS within the VPC."
-    from_port   = 53
-    to_port     = 53
-    protocol    = "udp"
-    cidr_blocks = [var.vpc_cidr]
-  }
+  egress      = []
 
   tags = { Name = "${local.name}-${each.key}" }
+}
+
+resource "aws_vpc_security_group_egress_rule" "app_https" {
+  for_each = aws_security_group.app
+
+  security_group_id = each.value.id
+  cidr_ipv4         = "0.0.0.0/0"
+  from_port         = 443
+  to_port           = 443
+  ip_protocol       = "tcp"
+  description       = "HTTPS to public market data, Groq, and AWS APIs."
+}
+
+resource "aws_vpc_security_group_egress_rule" "app_dns" {
+  for_each = aws_security_group.app
+
+  security_group_id = each.value.id
+  cidr_ipv4         = var.vpc_cidr
+  from_port         = 53
+  to_port           = 53
+  ip_protocol       = "udp"
+  description       = "DNS within the VPC."
 }
 
 # shortcut: the API is HTTP until Issue #33 adds TLS; remove this rule when its HTTPS endpoint exists.
