@@ -7,9 +7,14 @@ from alembic.config import Config
 
 
 def _config(database_url: str) -> Config:
-    # shortcut: source-tree image only; package migrations as resources for wheel-only use.
-    root = Path(__file__).resolve().parents[3]
-    config = Config(str(root / "alembic.ini"))
+    for root in (Path(__file__).resolve().parents[3], Path.cwd()):
+        config_path = root / "alembic.ini"
+        if config_path.is_file():
+            break
+    else:
+        raise FileNotFoundError("alembic.ini is required to run migrations")
+
+    config = Config(str(config_path))
     config.set_main_option("sqlalchemy.url", database_url)
     return config
 
